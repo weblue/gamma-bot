@@ -1,0 +1,198 @@
+# Audit metadata, not enabled feeds or promised entitlements.
+# coverage_* means observed market samples, not advertised archive bounds.
+# "unavailable" is an explicit sentinel, never a path/hash/time to ingest.
+# cost_usd is the audited free tier's incremental price; account costs/paid
+# alternatives are limitations, not dependencies. All sources remain disabled.
+audit_date = "2026-10-26"
+budget_usd = 0
+outcome = "no_gex_history"
+selected_gex_source = "unavailable"
+selected_gex_model = "unavailable"
+selected_expiry_universe = "unavailable"
+common_coverage_start = "unavailable"
+common_coverage_end = "unavailable"
+
+[[sources]]
+id = "gextool_dashboard"
+enabled = false
+homepage = "https://gextool.com/"
+documentation_url = "https://gextool.com/"
+access_status = "public_dashboard_inspected_no_export"
+cost_usd = 0
+automation_status = "unverified_do_not_record"
+kinds = ["gex_dashboard", "profile_dashboard"]
+timestamp_semantics = "Advertised delayed prices and 15-minute snapshots; no historical availability times verified."
+coverage_start = "unavailable"
+coverage_end = "unavailable"
+oi_semantics = "Vendor describes prior-session daily OCC OI; sample publication timestamps unavailable."
+model_semantics = "Advertised Black-Scholes quoted-IV model, calls positive/puts negative; expiry universe unverified. Not selected."
+sample_path = "unavailable"
+sample_sha256 = "unavailable"
+limitations = ["CSV export is supporter feature at USD 4.99/month plus VAT; excluded.", "15-minute cadence fails full wall stability.", "Free retention/automation rights and historical archive unverified."]
+
+[[sources]]
+id = "alpaca_basic_options"
+enabled = false
+homepage = "https://alpaca.markets/"
+documentation_url = "https://docs.alpaca.markets/us/docs/historical-option-data"
+access_status = "account_required_entitlements_unverified"
+cost_usd = 0
+automation_status = "documented_api_credentials_terms_and_retention_unverified"
+kinds = ["option_prices", "latest_greeks", "contract_metadata", "underlying_prices"]
+timestamp_semantics = "Free indicative quotes modified and trades delayed 15 minutes; actual sample availability absent. History advertised since February 2024."
+coverage_start = "unavailable"
+coverage_end = "unavailable"
+oi_semantics = "Optional OI and OI date in contract metadata; historical series/publication timestamp not verified."
+model_semantics = "Latest vendor Greeks do not establish historical as-of profiles or model inputs; not selected."
+sample_path = "unavailable"
+sample_sha256 = "unavailable"
+limitations = ["No authenticated requests or credentials supplied.", "Primary docs differ on old OPRA access; actual entitlement untested.", "Latest chain is not historical OI/Greeks archive.", "Underlying midpoint mapping unverified."]
+
+[[sources]]
+id = "tradier_brokerage"
+enabled = false
+homepage = "https://tradier.com/"
+documentation_url = "https://docs.tradier.com/docs/market-data"
+access_status = "brokerage_account_required_unverified"
+cost_usd = 0
+automation_status = "documented_api_token_terms_and_retention_unverified"
+kinds = ["option_chain", "greeks", "underlying_prices"]
+timestamp_semantics = "Advertised hourly ORATS Greeks starting around 10:15; sandbox prices delayed 15 minutes and no Greeks. No sample timestamps verified."
+coverage_start = "unavailable"
+coverage_end = "unavailable"
+oi_semantics = "Historical as-of OI and publication timestamps unverified."
+model_semantics = "ORATS vendor Greeks; no validated intraday profile or expiry universe selected."
+sample_path = "unavailable"
+sample_sha256 = "unavailable"
+limitations = ["No token/account tested; account costs not audited or authorized.", "Expired-option history unavailable per provider.", "Hourly cadence fails full wall stability; sandbox tick data unavailable."]
+
+[[sources]]
+id = "ibkr_existing_entitlements"
+enabled = false
+homepage = "https://www.interactivebrokers.com/"
+documentation_url = "https://www.interactivebrokers.com/docs/tws-api/doc/md/streaming-data"
+access_status = "existing_account_session_and_entitlements_unverified"
+cost_usd = 0
+automation_status = "documented_api_session_and_market_permissions_unverified"
+kinds = ["mes_prices", "trades", "quotes", "option_metadata"]
+timestamp_semantics = "Live/delayed/snapshot/historical semantics depend on instrument and entitlement; no sample verified."
+coverage_start = "unavailable"
+coverage_end = "unavailable"
+oi_semantics = "No historical option OI/publication sample verified."
+model_semantics = "No GEX model/profile selected; expired-option history unavailable."
+sample_path = "unavailable"
+sample_sha256 = "unavailable"
+limitations = ["No API calls or assumption of funded account, subscriptions or free historical ticks.", "Futures history beyond two years after expiry unavailable per provider.", "No real aggressor flags or ordered classification inputs verified."]
+
+[[sources]]
+id = "portara_mes_sample"
+enabled = false
+homepage = "https://portaracqg.com/"
+documentation_url = "https://portaracqg.com/futures/int/mes/"
+download_url = "https://portaradownloadersampledata.s3.amazonaws.com/1%20Minute/MES/MES2026M.txt"
+access_status = "anonymous_complimentary_file_inspected"
+cost_usd = 0
+automation_status = "one_off_download_only_no_recurring_collector_approved"
+kinds = ["mes_ohlcv_1m"]
+timestamp_semantics = "YYYYMMDD/HHMM Chicago local; vendor default start-of-bar provisional, file lacks boundary/arrival metadata. Coverage endpoints are labels converted to UTC."
+coverage_start = "2026-06-15T11:50:00Z"
+coverage_end = "2026-06-16T04:59:00Z"
+oi_semantics = "unavailable"
+model_semantics = "No GEX. MES2026M June 2026 individual contract per vendor link; no within-day roll, no independent exchange reconciliation."
+sample_path = "data/raw/portara/MES2026M.txt"
+sample_sha256 = "7da69432bae92af786e6d8c450bb64e12e0e4964afbe086b9c19ec7816a45a29"
+sample_bytes = 49181
+sample_records = 970
+sample_contract = "MES2026M"
+limitations = ["OHLCV only; no quotes, aggressor flags or CVD classification inputs.", "390 cash-session bars; not complete Globex session.", "Complimentary sample retention/reuse terms unspecified; local audit only, no redistribution.", "No overlapping GEX, SPY midpoint, intraday VIX or historical broker margin."]
+
+[[sources]]
+id = "historicalfuturesdata_sample_candidate"
+enabled = false
+homepage = "https://www.historicalfuturesdata.com/"
+documentation_url = "https://www.historicalfuturesdata.com/docs"
+access_status = "public_documentation_only_bytes_not_inspected"
+cost_usd = 0
+automation_status = "download_api_documented_rights_unverified"
+kinds = ["mes_ohlcv_10s_candidate"]
+timestamp_semantics = "Documentation says epoch-aligned UTC buckets; sample bytes unavailable in this audit."
+coverage_start = "unavailable"
+coverage_end = "unavailable"
+oi_semantics = "No options OI; documented futures tick OI placeholder is zero."
+model_semantics = "No GEX; continuous versus individual-contract/raw-price provenance unverified."
+sample_path = "unavailable"
+sample_sha256 = "unavailable"
+limitations = ["Latest-year 10-second anonymous sample advertised; not downloaded or validated.", "One-minute/daily free files require account; ticks/full history paid.", "License, roll and upstream provenance not verified; do not enable."]
+
+[[sources]]
+id = "cboe_vix_daily"
+enabled = false
+homepage = "https://www.cboe.com/"
+documentation_url = "https://www.cboe.com/tradable-products/vix/vix-historical-data"
+access_status = "public_daily_page_inspected_csv_reader_unsupported"
+cost_usd = 0
+automation_status = "no_intraday_feed_or_retention_permission_verified"
+kinds = ["vix_daily_context_only"]
+timestamp_semantics = "Daily history advertised, not completed one-minute observations or availability times."
+coverage_start = "unavailable"
+coverage_end = "unavailable"
+oi_semantics = "not_applicable"
+model_semantics = "VIX index, not VIX futures and not GEX."
+sample_path = "unavailable"
+sample_sha256 = "unavailable"
+limitations = ["Web reader rejected CSV content type; no bytes/hash claimed.", "Daily observations cannot satisfy intraday SMA10 or 90-second freshness."]
+
+[[sources]]
+id = "official_macro_calendars"
+enabled = false
+homepage = "https://www.bls.gov/schedule/"
+documentation_url = "https://www.bls.gov/schedule/2026/06_sched.htm"
+additional_documentation_urls = ["https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm", "https://www.ismworld.org/supply-management-news-and-reports/reports/rob-report-calendar/"]
+access_status = "public_pages_inspected_for_2026_06_15"
+cost_usd = 0
+automation_status = "manual_audit_only_no_calendar_adapter_enabled"
+kinds = ["macro_schedule"]
+timestamp_semantics = "Scheduled event time, not outcome; no required listed release on candidate day. BLS uses Eastern Time; ISM generic EST summer ambiguity unresolved for release days."
+coverage_start = "unavailable"
+coverage_end = "unavailable"
+oi_semantics = "not_applicable"
+model_semantics = "not_applicable"
+sample_path = "unavailable"
+sample_sha256 = "unavailable"
+limitations = ["Current published pages checked; no historical revision archive or machine-readable sample downloaded.", "Do not extrapolate absence of events to unverified dates or unscheduled announcements."]
+
+[[sources]]
+id = "nyse_session_calendar"
+enabled = false
+homepage = "https://www.nyse.com/"
+documentation_url = "https://www.nyse.com/markets/hours-calendars"
+access_status = "public_hours_holidays_inspected_for_2026_06_15"
+cost_usd = 0
+automation_status = "manual_audit_only"
+kinds = ["equity_session_schedule"]
+timestamp_semantics = "2026-06-15 regular 09:30-16:00 America/New_York inferred from published core hours and holiday exceptions; flatten 15:55."
+coverage_start = "unavailable"
+coverage_end = "unavailable"
+oi_semantics = "not_applicable"
+model_semantics = "not_applicable"
+sample_path = "unavailable"
+sample_sha256 = "unavailable"
+limitations = ["Strategy equity-session gate only, not MES Globex schedule.", "No calendar data file retained; other dates need verified close/early-close schedule."]
+
+[[sources]]
+id = "ibkr_historical_margin"
+enabled = false
+homepage = "https://www.interactivebrokers.com/"
+documentation_url = "https://www.interactivebrokers.com/en/trading/margin-futures-fops.php"
+access_status = "redirected_public_page_no_dated_mes_margin"
+cost_usd = 0
+automation_status = "unavailable"
+kinds = ["historical_broker_margin_candidate"]
+timestamp_semantics = "No 2026-06-15 effective-time evidence; current page is not a historical margin archive."
+coverage_start = "unavailable"
+coverage_end = "unavailable"
+oi_semantics = "not_applicable"
+model_semantics = "No margin scenario chosen by audit; future amounts must be labeled scenarios."
+sample_path = "unavailable"
+sample_sha256 = "unavailable"
+limitations = ["General margin page redirect; rendered page had no MES row.", "No authenticated account check; cannot claim historical IBKR executability."]
