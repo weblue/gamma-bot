@@ -143,6 +143,7 @@ approved network access. No account-gated endpoint was probed: missing credentia
 are recorded as missing access, not failed provider entitlements.
 
 ```sh
+mkdir -p data/raw/portara
 curl -fSL 'https://portaradownloadersampledata.s3.amazonaws.com/1%20Minute/MES/MES2026M.txt' -o data/raw/portara/MES2026M.txt
 shasum -a 256 data/raw/portara/MES2026M.txt
 git check-ignore data/raw/portara/MES2026M.txt

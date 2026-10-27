@@ -1,0 +1,34 @@
+# Accepted starting experiment. Decimal fractions serialize as strings.
+# All required filters remain enabled; missing inputs make setups ineligible.
+initial_equity_cents = 1000000
+risk_fraction = "0.01"
+daily_loss_fraction = "0.03"
+timezone = "America/New_York"
+opening_range_start = "09:30"
+opening_range_end = "09:45"
+entry_start = "09:45"
+entry_end = "10:30"
+flatten_minutes = 5
+max_positions = 1
+vix_periods = 10
+vix_ceiling = "22"
+level_tolerance_ticks = 4
+wall_snapshot_count = 3
+wall_min_span_seconds = 300
+wall_max_span_seconds = 900
+wall_max_gap_seconds = 300
+pivot_left_bars = 2
+pivot_right_bars = 2
+pivot_max_separation_seconds = 900
+target_r = "2"
+slippage_ticks = 1
+round_trip_fee_cents = 300
+cost_sensitivity_cents = [200, 300, 500]
+slippage_sensitivity_ticks = [1, 2, 4]
+gex_max_age_seconds = 300
+vix_max_age_seconds = 90
+mapping_max_age_seconds = 60
+mapping_window_seconds = 300
+mapping_min_pairs = 5
+macro_window_minutes = 30
+development_fraction = "0.70"

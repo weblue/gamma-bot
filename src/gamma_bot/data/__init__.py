@@ -1,0 +1,1 @@
+"""Validated normalized research inputs."""

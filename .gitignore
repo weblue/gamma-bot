@@ -1,1 +1,17 @@
 /data/raw/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+/build/
+/dist/
+/reports/
+/outputs/
+.env
+.env.*
+!.env.example
+credentials*.json
+credentials*.toml
+*.pem
+.aws/
