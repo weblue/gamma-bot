@@ -113,3 +113,32 @@ def test_invalid_as_of_is_reported_as_invalid_dataset(prices_only_path):
     from gamma_bot.data.models import InvalidDatasetError
     with pytest.raises(InvalidDatasetError):
         load_dataset(prices_only_path, as_of="2026-06-15T13:31:01Z")
+
+
+def test_import_memory_is_bounded_by_records_and_lines_not_whole_input(tmp_path):
+    """Blank padding must not become a second in-memory copy of market history."""
+    import hashlib
+    import tracemalloc
+    from gamma_bot.data.io import load_dataset
+
+    path = tmp_path / "padded.jsonl"
+    padding = b" " * 65535 + b"\n"
+    record = (json.dumps(bar_record()) + "\n").encode()
+    expected_hash = hashlib.sha256()
+    with path.open("wb") as handle:
+        for _ in range(256):  # 16 MiB, but only one retained market record.
+            handle.write(padding)
+            expected_hash.update(padding)
+        handle.write(record)
+        expected_hash.update(record)
+    tracemalloc.start()
+    try:
+        dataset = load_dataset(path)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert len(dataset.events) == 1
+    assert dataset.events[0].close_ticks == 24002
+    assert dataset.input_hashes["padded.jsonl"] == expected_hash.hexdigest()
+    assert peak < 4 * 1024 * 1024, f"Importer allocated {peak} bytes for one retained record"

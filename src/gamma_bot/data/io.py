@@ -106,24 +106,33 @@ def decode_record(record, cls):
 
 def _load_lines(path, cls=None):
     result = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            record = read_json(line)
-            if cls is None:
-                if not isinstance(record, dict) or record.get("type") not in EVENT_TYPES:
-                    raise InvalidDatasetError("missing or unknown event type")
-                kind = EVENT_TYPES[record["type"]]
-                record = {k: v for k, v in record.items() if k != "type"}
-            else:
-                kind = cls
-            result.append(decode_record(record, kind))
-        except (InvalidDatasetError, ValueError, TypeError) as exc:
-            # Do not echo record bytes or metadata values into diagnostics.
-            detail = str(exc) if isinstance(exc, InvalidDatasetError) else "malformed JSON"
-            raise InvalidDatasetError(f"{path.name}:{line_number}: {detail}") from exc
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            try:
+                record = read_json(line)
+                if cls is None:
+                    if not isinstance(record, dict) or record.get("type") not in EVENT_TYPES:
+                        raise InvalidDatasetError("missing or unknown event type")
+                    kind = EVENT_TYPES[record["type"]]
+                    record = {k: v for k, v in record.items() if k != "type"}
+                else:
+                    kind = cls
+                result.append(decode_record(record, kind))
+            except (InvalidDatasetError, ValueError, TypeError) as exc:
+                # Do not echo record bytes or metadata values into diagnostics.
+                detail = str(exc) if isinstance(exc, InvalidDatasetError) else "malformed JSON"
+                raise InvalidDatasetError(f"{path.name}:{line_number}: {detail}") from exc
     return result
+
+
+def _file_hash(path):
+    digest = sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(64 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _metadata(path):
@@ -227,7 +236,7 @@ def load_dataset(path: Path, *, as_of: datetime | None = None) -> Dataset:
         dataset = Dataset(events=tuple(events), source_metadata=sources,
                           limitations=limitations, macro_coverage_dates=macro_dates,
                           macro_schedule_available_at=macro_publication,
-                          input_hashes={p.name: sha256(p.read_bytes()).hexdigest() for p in paths},
+                          input_hashes={p.name: _file_hash(p) for p in paths},
                           **{name: tuple(rows) for name, rows in tables.items()})
         from .coverage import audit_dataset
         return replace(dataset, coverage=audit_dataset(dataset, RULE_IDS))

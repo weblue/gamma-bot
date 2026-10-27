@@ -1,7 +1,7 @@
 """Conservative input-capability audit, not a signal or profitability verdict."""
 from collections import defaultdict
+from bisect import bisect_left, bisect_right
 from datetime import time, timedelta
-from itertools import combinations
 from zoneinfo import ZoneInfo
 
 from .models import (CapabilityError, CoverageReport, Dataset, GexSnapshot, MesBar,
@@ -34,6 +34,20 @@ def _minute(at):
 def _precedes(quote, trade):
     qtime, ttime = (quote.available_at, quote.event_at), (trade.available_at, trade.event_at)
     return qtime < ttime or (qtime == ttime and quote.source_id == trade.source_id and quote.sequence < trade.sequence)
+
+
+def _has_wall_window(snapshots):
+    times = sorted({snapshot.event_at for snapshot in snapshots})
+    gap = timedelta(minutes=5)
+    for middle, at in enumerate(times):
+        # For this middle observation, the earliest eligible predecessor and
+        # latest eligible successor maximize span without exceeding either gap.
+        left = bisect_left(times, at - gap, hi=middle)
+        right = bisect_right(times, at + gap, lo=middle + 1) - 1
+        if left < middle < right and times[right] - times[left] >= gap:
+            # Two gaps of at most 5 minutes also imply a span <= 10 (< 15).
+            return True
+    return False
 
 
 def audit_dataset(dataset: Dataset, required_rules: frozenset[str]) -> CoverageReport:
@@ -90,18 +104,11 @@ def audit_dataset(dataset: Dataset, required_rules: frozenset[str]) -> CoverageR
                 dates["mapping"].add(day)
     groups = defaultdict(list)
     for e in gex:
-        groups[(e.source_id, e.underlying, e.model_id, e.expiry_days, _day(e.event_at))].append(e)
+        if e.walls and e.available_at - e.event_at <= timedelta(minutes=5):
+            groups[(e.source_id, e.underlying, e.model_id, e.expiry_days, _day(e.event_at))].append(e)
     for key, snapshots in groups.items():
-        ordered = sorted(snapshots, key=lambda e: e.event_at)
-        for triple in combinations(ordered, 3):
-            a, b, c = triple
-            span = c.event_at - a.event_at
-            if (timedelta(minutes=5) <= span <= timedelta(minutes=15) and
-                    timedelta(0) < b.event_at-a.event_at <= timedelta(minutes=5) and
-                    timedelta(0) < c.event_at-b.event_at <= timedelta(minutes=5) and
-                    all(s.walls and s.available_at-s.event_at <= timedelta(minutes=5) for s in triple)):
-                dates["wall_migration"].add(key[-1])
-                break
+        if _has_wall_window(snapshots):
+            dates["wall_migration"].add(key[-1])
     for session in dataset.sessions:
         start = session.open_at
         if start.astimezone(ET).time() != time(9, 30):

@@ -1,4 +1,5 @@
 from conftest import bar_record, gex_record, point_record, quote_record
+import pytest
 
 
 def test_price_only_input_does_not_claim_full_coverage(prices_only_path):
@@ -132,3 +133,45 @@ def test_delayed_session_open_does_not_shift_fixed_opening_range(dataset_writer)
                    close_at="2026-06-15T20:00:00Z", schedule_available_at="2026-06-14T00:00:00Z")
     report = load_dataset(dataset_writer(rows, sessions=[session])).coverage
     assert "opening_range" in report.missing_rules
+
+
+@pytest.mark.parametrize("pattern", ["no_walls", "excessive_latency", "short_span"])
+def test_historical_scale_incomplete_wall_inputs_finish_promptly(dataset_writer, tmp_path, pattern):
+    """A day-sized incomplete input must report missing coverage within five seconds."""
+    from datetime import datetime, timedelta, timezone
+    import json
+    import subprocess
+    import sys
+
+    start = datetime(2026, 6, 15, 13, 30, tzinfo=timezone.utc)
+    rows = []
+    for i in range(1440):
+        at = start + timedelta(seconds=i / 10 if pattern == "short_span" else i)
+        latency = 600 if pattern == "excessive_latency" else 1
+        changes = {"walls": []} if pattern == "no_walls" else {}
+        rows.append(gex_record(sequence=i, event_at=at.isoformat(),
+                               available_at=(at + timedelta(seconds=latency)).isoformat(), **changes))
+    path = dataset_writer(rows)
+    output = tmp_path / "audit.json"
+    result = subprocess.run([sys.executable, "-m", "gamma_bot", "audit", "--dataset", str(path),
+                             "--output", str(output)], capture_output=True, text=True, timeout=5)
+    assert result.returncode == 2, result.stderr
+    report = json.loads(output.read_text())
+    assert "wall_migration" in report["missing_rules"]
+    assert report["synthetic"] is True
+
+
+@pytest.mark.parametrize("minute_offsets, supported", [
+    ([0, 1, 5], True), ([0, 5, 10], True), ([0, 2, 4, 6], True),
+    ([0, 0, 5], False), ([0, 5, 15], False), ([0, 1, 4], False),
+])
+def test_wall_window_preserves_distinct_spacing_and_inclusive_boundaries(dataset_writer, minute_offsets, supported):
+    from datetime import datetime, timedelta, timezone
+    from gamma_bot.data.io import load_dataset
+
+    start = datetime(2026, 6, 15, 13, 30, tzinfo=timezone.utc)
+    rows = [gex_record(sequence=i, event_at=(start + timedelta(minutes=offset)).isoformat(),
+                       available_at=(start + timedelta(minutes=offset, seconds=1)).isoformat())
+            for i, offset in enumerate(minute_offsets)]
+    report = load_dataset(dataset_writer(rows)).coverage
+    assert ("wall_migration" in report.supported_rules) is supported
