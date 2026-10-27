@@ -87,6 +87,54 @@ def test_cancellation_releases_only_unfilled_collateral():
     assert account.position_quantity == 1
 
 
+@pytest.mark.parametrize("close_first,contract,side", [
+    (True, "MESU6", "buy"),
+    (True, "MESM6", "sell"),
+    (False, "MESM6", "sell"),
+])
+def test_pending_entry_ownership_survives_interleaved_exits(close_first, contract, side):
+    account = Account(1_000_000)
+    account.reserve("entry", 2, 100_000)
+    account.apply_fill(fill())
+    if close_first:
+        account.apply_fill(fill("sell", 24008, order="exit"))
+        assert account.equity_cents == account.cash_cents == 1_000_700
+        assert account.position_quantity == 0
+        assert account.reserved_margin_cents == 100_000
+    else:
+        assert account.equity_cents == account.cash_cents == 999_850
+        assert account.position_quantity == 1
+        assert account.reserved_margin_cents == 200_000
+    before = (account.cash_cents, account.equity_cents, account.gross_realized_pnl_cents,
+              account.realized_pnl_cents, account.unrealized_pnl_cents, account.fees_cents,
+              account.position_quantity, account.position_contract,
+              account.reserved_margin_cents, account.free_margin_cents)
+    with pytest.raises(ValueError):
+        account.apply_fill(fill(side, 24016, contract=contract, fee=200))
+    assert account.entries_blocked
+    assert (account.cash_cents, account.equity_cents, account.gross_realized_pnl_cents,
+            account.realized_pnl_cents, account.unrealized_pnl_cents, account.fees_cents,
+            account.position_quantity, account.position_contract,
+            account.reserved_margin_cents, account.free_margin_cents) == before
+    # Only the still-pending contract is released, proving rejection did not
+    # consume or change its reservation even with an open contract remaining.
+    account.release("entry")
+    assert account.reserved_margin_cents == (0 if close_first else 100_000)
+
+
+def test_owned_pending_fill_remains_recordable_after_interleaved_exit():
+    account = Account(1_000_000)
+    account.reserve("entry", 2, 100_000)
+    account.apply_fill(fill())
+    account.apply_fill(fill("sell", 24008, order="exit"))
+    account.apply_fill(fill(price=24012))
+    assert not account.entries_blocked
+    assert account.position_contract == "MESM6"
+    assert account.position_quantity == 1
+    assert account.reserved_margin_cents == 100_000
+    assert account.equity_cents == account.cash_cents == 1_000_550
+
+
 def test_daily_shutdown_latches_at_three_percent_even_after_recovery():
     account = opened(fee=0)
     assert account.mark(23761) == 970_125

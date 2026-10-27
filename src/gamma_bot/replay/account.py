@@ -34,6 +34,8 @@ class _Reservation:
     order_id: str
     remaining: int
     per_contract_cents: int
+    contract: str | None = None
+    side: Literal["buy", "sell"] | None = None
 
 
 @dataclass
@@ -200,15 +202,24 @@ class Account:
     def apply_fill(self, fill: Fill) -> None:
         if not isinstance(fill, Fill):
             self._unowned("validated Fill required")
+        reservation = self._reservation
+        if reservation is not None and reservation.order_id == fill.order_id:
+            # A pending entry keeps its ownership terms even when an exit
+            # flattens its earlier partial fill. Validate before classifying
+            # an opposite-side execution as an exit or changing any ledger.
+            if reservation.contract is not None and (
+                    fill.contract != reservation.contract or fill.side != reservation.side):
+                self._unowned("pending entry contract or side mismatch requires reconciliation")
         direction = 1 if fill.side == "buy" else -1
         if self._contract is not None and fill.contract != self._contract:
             self._unowned("unrelated contract fill requires reconciliation")
         opening = not self._lots or direction == self._direction
         if opening:
-            reservation = self._reservation
             if (reservation is None or reservation.order_id != fill.order_id
                     or fill.quantity > reservation.remaining):
                 self._unowned("unreserved opening fill requires reconciliation")
+            reservation.contract = fill.contract
+            reservation.side = fill.side
             self._lots.append(_Lot(fill.quantity, fill.price_ticks,
                                    reservation.per_contract_cents))
             reservation.remaining -= fill.quantity
