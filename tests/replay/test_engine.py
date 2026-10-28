@@ -380,3 +380,122 @@ def test_roll_starts_new_contract_features_with_fresh_warmup():
     result = run(data)
     assert result.manifest['roll_history'][-1]['contract'] == 'MESZ6'
     assert not result.trades and not result.unresolved_exposure
+
+
+@pytest.mark.parametrize('capacity', [1,20])
+def test_decreasing_partial_entry_target_allocates_once_to_account_fifo(capacity):
+    early = (quote(1,24003,24004,ask_size=1),
+             quote(2,24000,24001,ask_size=1,seq=1001),
+             quote(3,24009,24010,bid_size=capacity,ask_size=0,seq=1002))
+    result = run(dataset(*early,margin=100000))
+    # One lower target order exits one economic FIFO lot, even with excess liquidity.
+    trade, = result.trades
+    assert (trade.entry_price_ticks,trade.exit_price_ticks,trade.gross_pnl_cents) == (24005,24007,250)
+    assert trade.target_ticks == 24017
+    assert trade.exit_trigger_target_ticks == 24008
+    assert result.manifest['gross_realized_pnl_cents'] == 250
+    assert result.manifest['ending_equity_cents'] == 1000675
+    assert result.unresolved_exposure['position_quantity'] == 1
+    assert result.unresolved_exposure['pending_quantity'] == 0
+    assert result.unresolved_exposure['lots'][0]['entry'].price_ticks == 24002
+    assert result.unresolved_exposure['lots'][0]['target_ticks'] == 24008
+    last_exit = quote(4,24009,24010,bid_size=20,ask_size=0,seq=1003)
+    result = run(dataset(*early,last_exit,margin=100000))
+    assert [(t.entry_price_ticks,t.exit_price_ticks) for t in result.trades] == [(24005,24007),(24002,24007)]
+    assert sum(t.gross_pnl_cents for t in result.trades) == 875
+    assert result.manifest['gross_realized_pnl_cents'] == 875
+    assert result.manifest['ending_equity_cents'] == 1000275
+    assert not result.unresolved_exposure
+
+
+@pytest.mark.parametrize('shutdown', ['daily_loss','maintenance_deficit'])
+def test_bar_close_shutdown_preserves_already_active_intrabar_stop(shutdown):
+    entry = quote(1,24003,24004)
+    stop_bar = bar(OPEN+timedelta(minutes=18),518,close=23700,high=24000,low=23700)
+    data = dataset(entry,stop_bar)
+    if shutdown == 'maintenance_deficit':
+        # No daily threshold breach, but its closing mark breaches known maintenance.
+        stop_bar = replace(stop_bar,close_ticks=23980,low_ticks=23980)
+        data = dataset(entry,stop_bar,margin=999000)
+    result = run(data)
+    trade, = result.trades
+    assert trade.exit_reason == 'stop'
+    assert trade.exit_at == stop_bar.available_at
+    assert trade.exit_price_ticks == 23998
+    assert trade.gross_pnl_cents == -875
+    assert min(p.equity_cents for p in result.equity_curve) == 998825
+    assert not any(s.reason == shutdown for s in result.skips)
+    assert result.manifest['ending_reserved_margin_cents'] == 0
+    assert not result.unresolved_exposure
+
+
+@pytest.mark.parametrize('complete', [True,False])
+def test_retained_delivery_month_contract_can_recover_only_to_evidenced_adjacent_winner(complete):
+    from gamma_bot.replay.roll import RollSelector
+    selector = RollSelector()
+    august28 = datetime(2026,8,28,13,30,tzinfo=UTC)
+    august31 = datetime(2026,8,31,13,30,tzinfo=UTC)
+    september1 = datetime(2026,9,1,13,30,tzinfo=UTC)
+    september2 = datetime(2026,9,2,13,30,tzinfo=UTC)
+    def evidence(at,u,z):
+        sess = session(at)
+        for b in (*prior_bars(at=at,volume=u), *prior_bars(at=at,contract='MESZ6',volume=z)):
+            selector.observe(b,sess)
+        return sess
+    previous = evidence(august28,20,10)
+    assert selector.select(session(august31),previous,august31) == ('MESU6',())
+    if complete:
+        previous = evidence(august31,20,10)
+    else:
+        previous = session(august31)
+        for b in prior_bars(at=august31,contract='MESZ6',volume=20):
+            selector.observe(b,previous)
+    reason = 'contract_expiry_unverified' if complete else 'roll_evidence_missing'
+    assert selector.select(session(september1),previous,september1) == (None,(reason,))
+    assert selector.active == 'MESU6'
+    # Excluded September 1 still establishes valid evidence for the next session.
+    previous = evidence(september1,10,20)
+    assert selector.select(session(september2),previous,september2) == ('MESZ6',())
+
+
+def test_lower_target_order_quantity_is_fifo_split_once_across_entry_lots():
+    data = dataset(quote(1,24003,24004,ask_size=1),
+                   quote(2,24000,24001,ask_size=2,seq=1001),
+                   quote(3,24009,24010,bid_size=20,ask_size=0,seq=1002),margin=100000)
+    result = run(data)
+    assert [(t.entry_price_ticks,t.quantity,t.gross_pnl_cents) for t in result.trades] == [(24005,1,250),(24002,1,625)]
+    assert [t.exit_trigger_target_ticks for t in result.trades] == [24008,24008]
+    assert result.manifest['gross_realized_pnl_cents'] == 875
+    assert result.manifest['fees_cents'] == 750
+    assert result.manifest['ending_equity_cents'] == 1001000
+    assert result.unresolved_exposure['lots'][0]['entry'].price_ticks == 24002
+    assert result.unresolved_exposure['lots'][0]['remaining'] == 1
+
+
+def test_new_bar_close_maintenance_liquidation_cannot_use_that_bars_open():
+    entry = quote(1,24003,24004)
+    marked_bar = replace(bar(OPEN+timedelta(minutes=18),518), open_ticks=24003,
+                         high_ticks=24004,low_ticks=24000,close_ticks=24002)
+    data = dataset(entry,marked_bar,margin=999500)
+    result = run(data)
+    assert not result.trades
+    assert result.unresolved_exposure['liquidation'] == (marked_bar.available_at,'maintenance_deficit')
+    later = replace(quote(2,24001,24002,seq=1002),
+                    event_at=marked_bar.available_at+timedelta(seconds=1),
+                    available_at=marked_bar.available_at+timedelta(seconds=1))
+    result = run(replace(data,events=(*data.events,later)))
+    trade, = result.trades
+    assert trade.exit_reason == 'maintenance_deficit'
+    assert trade.exit_at == later.available_at
+    assert trade.exit_price_ticks == 24000
+
+
+def test_bar_entry_stop_precedes_closing_mark_without_phantom_daily_loss():
+    entry_bar = bar(OPEN+timedelta(minutes=17),517,close=23700,high=24004,low=23700)
+    result = run(dataset(entry_bar))
+    trade, = result.trades
+    assert (trade.entry_price_ticks,trade.exit_price_ticks,trade.exit_reason) == (24001,23998,'stop')
+    assert trade.net_pnl_cents == -675
+    assert min(p.equity_cents for p in result.equity_curve) == 999325
+    assert result.manifest['ending_equity_cents'] == 999325
+    assert not result.unresolved_exposure

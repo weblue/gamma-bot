@@ -61,8 +61,6 @@ class RollSelector:
             if candidates[0] in ambiguous:
                 return None, ('roll_volume_source_ambiguous',)
             self.active = candidates[0]
-        if key(self.active) <= period:
-            return None, ('contract_expiry_unverified',)
         year, month = key(self.active)
         next_period = (year+1, 3) if month == 12 else (year, month+3)
         if self.active in ambiguous or any(key(c) == next_period for c in ambiguous):
@@ -77,4 +75,8 @@ class RollSelector:
             return None, ('roll_challenger_evidence_missing',)
         if volumes[challengers[0]] > volumes[self.active]:
             self.active = challengers[0]
+        # An ineligible retained contract may still supply causal comparison
+        # evidence for its adjacent successor; never execute the ineligible one.
+        if key(self.active) <= period:
+            return None, ('contract_expiry_unverified',)
         return self.active, ()

@@ -36,7 +36,9 @@ cannot reset active-contract features. A source switch in feature midpoint input
 fails closed: select one compatible feed per experiment rather than implicitly
 combining sources. Source-name sorting supplies no cross-source causal evidence.
 
-Existing-position marks and account reconciliation precede exits; features and
+Quote marks and account reconciliation precede exits. For completed bars,
+already-active intrabar protection executes before the closing mark, so a stop
+cannot be suppressed by a shutdown inferred only from that close. Features and
 completed-bar proposals follow; pending entries can then fill only on a later
 eligible market observation. A new signal cannot fill at the signal's availability
 clock, even if another source sorts later. Delayed quotes with market time before
@@ -67,6 +69,15 @@ FIFO lot slice, so one economic order may produce several records; group by
 strategy/trigger/contract when reporting economic trades. No weighted-average
 price substitutes for an executable price. `planned_risk_cents` is that slice's
 executable-entry stop risk plus both fee halves and remaining exit slippage.
+Target orders and economic lot allocation are distinct: a later entry's lower
+target can trigger a reduction that Account assigns to the oldest FIFO entry.
+`target_ticks` retains the economic entry's original 2R level, while optional
+`exit_trigger_target_ticks` records the target order that caused the execution.
+The engine consumes the same FIFO entries as Account and preserves the surviving
+entries' own protection. Each original target order authorizes its outstanding
+quantity only once per observation, even with excess quote liquidity; replacement
+protection waits for a later observation. Multiple simultaneously triggered
+original orders share that observation's total capacity.
 
 Stops fill at the worse of the executable price and stop, then adverse slippage.
 If stop and target both occur in one OHLC bar, stop wins. A bar entry can hit
@@ -123,3 +134,8 @@ verified exchange expiry date; delivery-month and older contracts are excluded
 rather than inferring an expiry holiday rule. This conservative research policy
 loses some valid pre-expiry trading sessions and is not broker-ready expiry
 validation. Roll history, exclusions and assumptions remain in every manifest.
+Before excluding a retained delivery-month contract, the selector still performs
+its one causal adjacent-quarter comparison. If the valid successor wins, trading
+can resume in that successor. Otherwise the session stays excluded and subsequent
+sessions may retry with their own complete prior-session evidence; exclusion never
+licenses executing the unverified contract or skipping directly to a distant one.

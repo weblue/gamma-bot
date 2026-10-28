@@ -50,6 +50,7 @@ class TradeRecord:
     fees_cents: int
     exit_reason: str
     risk_breach: bool
+    exit_trigger_target_ticks: int | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -212,6 +213,8 @@ class _Replay:
         for lot in tuple(self.lots):
             if remaining_capacity <= 0:
                 break
+            if lot.remaining == 0:
+                continue
             if lot.signal.contract != event.contract:
                 continue
             if not entry_bar and (event.available_at <= lot.entry.at or event.event_at < lot.entry.at or
@@ -221,12 +224,13 @@ class _Replay:
                 stop_ticks=lot.signal.stop_ticks, target_ticks=lot.target_ticks)
             if self.forced:
                 at, reason = self.forced
-                # Deficits discovered at this observation cannot avoid its gap.
-                if reason in ('maintenance_deficit', 'risk_breach') and event.available_at <= at:
-                    continue
-                if event.event_at < at or isinstance(event, MesBar) and event.start_at < at:
-                    continue
-                price_reason = executable_price(event, 'sell' if lot.signal.direction == 'long' else 'buy'), reason
+                # Only the new liquidation order needs to wait. Protection that
+                # was active during this bar remains valid independently.
+                eligible = not (
+                    reason in ('maintenance_deficit', 'risk_breach') and event.available_at <= at
+                    or event.event_at < at or isinstance(event, MesBar) and event.start_at < at)
+                if eligible:
+                    price_reason = executable_price(event, 'sell' if lot.signal.direction == 'long' else 'buy'), reason
             if price_reason is None:
                 continue
             price, reason = price_reason
@@ -238,10 +242,26 @@ class _Replay:
             if fill is None:
                 continue
             self.account.apply_fill(fill)
-            qty = fill.quantity
+            self.record_exit(fill, reason, lot.target_ticks if reason == 'target' else None)
+            remaining_capacity -= fill.quantity
+            self.last_exit_at = event.available_at
+        if not self.lots:
+            self.forced = None
+
+    def record_exit(self, fill, reason, trigger_target):
+        """Allocate an order's execution to the same economic FIFO lots as Account.
+
+        The originating target order need not belong to the oldest economic lot.
+        Its quantity is used once by close(); remaining entries retain their own
+        protection for subsequent eligible observations.
+        """
+        remaining = fill.quantity
+        while remaining:
+            lot = self.lots[0]
+            qty = min(remaining, lot.remaining)
             gross = ((fill.price_ticks-lot.entry.price_ticks)*qty*TICK_VALUE_CENTS *
                      (1 if lot.signal.direction == 'long' else -1))
-            fees = (self.config.round_trip_fee_cents//2)*qty+fill.fee_cents
+            fees = (self.config.round_trip_fee_cents//2)*qty+fill.fee_cents*qty//fill.quantity
             self.trades.append(TradeRecord(strategy=lot.signal.strategy, trigger_id=lot.signal.trigger_id,
                 variant_name=lot.signal.variant_name, omitted_rules=lot.signal.omitted_rules,
                 contract=lot.signal.contract, signal_at=lot.signal.decision_at, entry_at=lot.entry.at,
@@ -250,14 +270,12 @@ class _Replay:
                 stop_ticks=lot.signal.stop_ticks, target_ticks=lot.target_ticks,
                 planned_risk_cents=lot.planned_per_contract*qty, gross_pnl_cents=gross,
                 net_pnl_cents=gross-fees, fees_cents=fees, exit_reason=reason,
-                risk_breach=lot.risk_breach or gross*-1+fees > lot.planned_per_contract*qty))
+                risk_breach=lot.risk_breach or gross*-1+fees > lot.planned_per_contract*qty,
+                exit_trigger_target_ticks=trigger_target))
             lot.remaining -= qty
-            remaining_capacity -= qty
-            self.last_exit_at = event.available_at
+            remaining -= qty
             if lot.remaining == 0:
-                self.lots.remove(lot)
-        if not self.lots:
-            self.forced = None
+                self.lots.pop(0)
 
     def open(self, event):
         pending = self.pending
@@ -305,7 +323,13 @@ class _Replay:
             self.pending = None
         elif fill.quantity == quantity and quantity < pending.remaining+fill.quantity:
             self.cancel(event.available_at, 'execution_resize_cancelled_remainder')
-        self.mark(event)
+        if isinstance(event, Quote):
+            self.mark(event)
+        else:
+            # A bar entry is at its open: do not mark its still-future close
+            # before evaluating protection that became active at that open.
+            self.account.mark(event.open_ticks)
+            self.equity.append(EquityPoint(at=event.available_at, equity_cents=self.account.equity_cents))
         risk = sum(((abs(l.entry.price_ticks-l.signal.stop_ticks)+self.config.slippage_ticks)*TICK_VALUE_CENTS +
                     self.config.round_trip_fee_cents)*l.remaining for l in self.lots)
         if self.pending and risk + self.pending.remaining*self.pending.planned_per_contract > int(
@@ -391,9 +415,14 @@ class _Replay:
             fresh = market and event.event_at >= self.last_market_at.get(contract, event.event_at)
             if fresh:
                 self.last_market_at[contract] = event.event_at
+                if isinstance(event, MesBar):
+                    # Existing protection was active inside the completed bar,
+                    # before a closing mark could create a shutdown request.
+                    self.close(event)
                 self.mark(event)
                 self.clock(now)  # marked equity precedes shutdown/maintenance checks
-                self.close(event)
+                if isinstance(event, Quote):
+                    self.close(event)
             state = self.features.update(event) if contract is None or contract == self.active else None
             if isinstance(event, MesBar) and state is not None:
                 self.propose(state, event)
