@@ -128,3 +128,20 @@ def test_delayed_older_trade_cannot_displace_latest_causal_market_tick():
     flow.update(trade(0, "unknown", size=2, price=24001, source_id="one-feed", sequence=3,
                       event_at=at(0, 40), available_at=at(0, 40)))
     assert flow.value_at(at(0, 40)) == 0
+
+
+@pytest.mark.parametrize("direction", ["long", "short"])
+def test_price_pivots_are_confirmed_without_cvd_after_right_bars(direction):
+    detector = PivotDetector()
+    lows = [23995, 23994, 23990, 23994, 23995]
+    highs = [24005, 24006, 24010, 24006, 24005]
+    for minute in range(4):
+        detector.update(bar(minute, low=lows[minute] if direction == "long" else 23990,
+                            high=highs[minute] if direction == "short" else 24010), None)
+        assert detector.price_pivots == ()
+    detector.update(bar(4, low=lows[4] if direction == "long" else 23990,
+                        high=highs[4] if direction == "short" else 24010,
+                        available_at=at(5, 7)), None)
+    pivot, = detector.price_pivots
+    assert (pivot.direction, pivot.at, pivot.confirmed_at, pivot.price_ticks, pivot.cvd) == (
+        direction, at(3), at(5, 7), 23990 if direction == "long" else 24010, None)

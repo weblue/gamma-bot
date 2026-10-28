@@ -62,6 +62,16 @@ class OrderFlow:
 
 
 @dataclass(frozen=True, kw_only=True)
+class PricePivot:
+    """A confirmed price low (long) or high (short), independent of CVD."""
+    direction: Literal["long", "short"]
+    at: datetime
+    confirmed_at: datetime
+    price_ticks: int
+    cvd: int | None = None
+
+
+@dataclass(frozen=True, kw_only=True)
 class Divergence:
     direction: Literal["long", "short"]
     first_at: datetime
@@ -78,9 +88,17 @@ class PivotDetector:
         self._width = self.config.pivot_left_bars + self.config.pivot_right_bars + 1
         self._bars = deque(maxlen=self._width)
         self._pivots: dict[str, tuple[MesBar, int | None]] = {}
+        self._price_pivots: tuple[PricePivot, ...] = ()
+
+    @property
+    def price_pivots(self) -> tuple[PricePivot, ...]:
+        """Confirmed pivots retained for two maximum separation windows."""
+        return self._price_pivots
 
     def update(self, bar: MesBar, cvd: int | None) -> tuple[Divergence, ...]:
         self._bars.append((bar, cvd))
+        self._price_pivots = tuple(p for p in self._price_pivots if
+            (bar.available_at - p.at).total_seconds() <= 2 * self.config.pivot_max_separation_seconds)
         if len(self._bars) < self._width:
             return ()
         bars = list(self._bars)
@@ -96,6 +114,8 @@ class PivotDetector:
             extreme = compare(getattr(b, field) for b in others)
             if not (level < extreme if direction == "long" else level > extreme):
                 continue
+            self._price_pivots += (PricePivot(direction=direction, at=pivot.event_at,
+                confirmed_at=bar.available_at, price_ticks=level, cvd=pivot_cvd),)
             previous = self._pivots.get(direction)
             self._pivots[direction] = (pivot, pivot_cvd)
             if previous is None or pivot_cvd is None or previous[1] is None:

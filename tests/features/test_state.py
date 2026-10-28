@@ -185,3 +185,20 @@ def test_import_audit_and_runtime_share_quote_predecessor_policy(dataset_writer,
         assert "cvd" in dataset.coverage.supported_rules
         assert "cvd" not in state.unavailable_rules
     assert engine.cvd == expected
+
+
+@pytest.mark.parametrize("unknown_trade", [False, True])
+def test_engine_exposes_price_pivots_with_missing_or_unclassified_cvd(unknown_trade):
+    engine = FeatureEngine()
+    if unknown_trade:
+        engine.update(trade(0, "unknown"))
+    lows = [23995, 23994, 23990, 23994, 23995]
+    for minute in range(4):
+        state = engine.update(bar(minute, low=lows[minute]))
+        assert state.price_pivots == ()
+    state = engine.update(bar(4, low=lows[4], available_at=at(5, 7)))
+    pivot, = state.price_pivots
+    assert (pivot.at, pivot.confirmed_at, pivot.price_ticks, pivot.cvd) == (at(3), at(5, 7), 23990, None)
+    assert "cvd" in state.unavailable_rules
+    assert state.divergences == ()
+    assert engine.update(bar(5, contract="MESU6")).price_pivots == ()

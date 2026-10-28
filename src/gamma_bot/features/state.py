@@ -14,7 +14,7 @@ from gamma_bot.data.models import (
 from .gex import gex_from_options
 from .indicators import OpeningRange, OpeningRangeIndicator, VixIndicator, VixState
 from .mapping import MappedGex, MappedRegion, MappedWall, map_levels, stable_wall
-from .order_flow import Divergence, OrderFlow, PivotDetector
+from .order_flow import Divergence, OrderFlow, PivotDetector, PricePivot
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -29,12 +29,14 @@ class FeatureState:
     previous_gex: MappedGex | None = None
     wall_history: tuple[MappedGex, ...] = ()
     divergences: tuple[Divergence, ...] = ()
+    price_pivots: tuple[PricePivot, ...] = ()
     unavailable_rules: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
         object.__setattr__(self, "unavailable_rules", MappingProxyType(dict(self.unavailable_rules)))
         object.__setattr__(self, "wall_history", tuple(self.wall_history))
         object.__setattr__(self, "divergences", tuple(self.divergences))
+        object.__setattr__(self, "price_pivots", tuple(self.price_pivots))
 
 
 class FeatureEngine:
@@ -226,6 +228,9 @@ class FeatureEngine:
         state = FeatureState(as_of=event.available_at, contract=self._contract,
             bar=self._bar, previous_bar=self._previous_bar, opening_range=self._opening_range,
             vix=vix, current_gex=current, previous_gex=self._previous_gex,
-            wall_history=history, divergences=self._divergences, unavailable_rules=unavailable)
+            wall_history=history, divergences=self._divergences,
+            price_pivots=tuple(p for p in self._pivots.price_pivots if
+                (event.available_at - p.at).total_seconds() <= 2 * self.config.pivot_max_separation_seconds),
+            unavailable_rules=unavailable)
         self._last_key, self._last_event, self._last_state = key, event, state
         return state
