@@ -106,3 +106,25 @@ def test_quote_rule_cannot_choose_between_ambiguous_latest_quote_feeds():
     flow.update(quote(0, source_id="z-quotes", sequence=1, bid_ticks=24001, ask_ticks=24003))
     flow.update(trade(1, "unknown", price=24001))
     assert flow.value_at(at(1)) is None
+
+
+def test_delayed_older_quote_cannot_displace_latest_causal_market_quote():
+    flow = OrderFlow()
+    flow.update(quote(0, source_id="one-feed", sequence=2, event_at=at(0, 20),
+                      available_at=at(0, 20), bid_ticks=24000, ask_ticks=24002))
+    flow.update(quote(0, source_id="one-feed", sequence=1, available_at=at(0, 30),
+                      bid_ticks=23998, ask_ticks=24000))
+    flow.update(trade(0, "unknown", size=10, price=24000, source_id="one-feed",
+                      sequence=3, event_at=at(0, 40), available_at=at(0, 40)))
+    assert flow.value_at(at(0, 40)) == -10
+
+
+def test_delayed_older_trade_cannot_displace_latest_causal_market_tick():
+    flow = OrderFlow()
+    flow.update(trade(0, "buy", size=5, price=24002, source_id="one-feed", sequence=2,
+                      event_at=at(0, 20), available_at=at(0, 20)))
+    flow.update(trade(0, "sell", size=3, price=24000, source_id="one-feed", sequence=1,
+                      available_at=at(0, 30)))
+    flow.update(trade(0, "unknown", size=2, price=24001, source_id="one-feed", sequence=3,
+                      event_at=at(0, 40), available_at=at(0, 40)))
+    assert flow.value_at(at(0, 40)) == 0

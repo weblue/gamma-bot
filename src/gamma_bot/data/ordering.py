@@ -23,17 +23,18 @@ def causally_precedes(earlier: MarketEvent, later: MarketEvent) -> bool:
 
 
 def latest_causal_predecessor(candidates: Iterable[T], event: MarketEvent) -> T | None:
-    """Select a unique latest causal observation, never break a feed tie by name.
+    """Select the newest eligible market observation, not the latest publication.
 
-    Different sources at the latest timestamp cannot establish which observation
-    was last, even when both precede event. Missing ordering stays unavailable.
+    Rank event time first so late older records cannot displace newer market
+    observations. Availability breaks event-time ties; unresolved cross-feed
+    ties stay unavailable rather than being broken by source name or sequence.
     """
     eligible = [candidate for candidate in candidates if causally_precedes(candidate, event)]
     if not eligible:
         return None
-    latest_time = max((candidate.available_at, candidate.event_at) for candidate in eligible)
+    latest_time = max((candidate.event_at, candidate.available_at) for candidate in eligible)
     latest = [candidate for candidate in eligible
-              if (candidate.available_at, candidate.event_at) == latest_time]
+              if (candidate.event_at, candidate.available_at) == latest_time]
     if len({candidate.source_id for candidate in latest}) != 1:
         return None
     return max(latest, key=lambda candidate: candidate.sequence)
