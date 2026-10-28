@@ -49,6 +49,43 @@ def _replay(args) -> int:
     return 2 if result.manifest['status'] == 'unsupported' else 0
 
 
+def _evaluate(args) -> int:
+    from .research.experiments import default_variants, evaluate, experiment_plan
+    from .research.report import REPORT_FILES, COMPARISON_FILES, write_report, write_comparison
+
+    config, dataset = load_config(args.config), load_dataset(args.dataset)
+    variants = default_variants()
+    plan = experiment_plan(dataset, config, variants)
+    targets = [args.output/name for name in (*COMPARISON_FILES, 'split.json', 'experiments.json')]
+    replay_files = set(REPORT_FILES) | {name+'.json' for name in
+        ('trades', 'equity_curve', 'skips', 'unresolved_exposure', 'coverage', 'manifest')}
+    for part in plan['parts']:
+        for variant in variants:
+            for scenario in plan['scenarios']:
+                targets.extend(args.output/part/variant.name/scenario/name for name in replay_files)
+    # Check the entire output tree before freezing a split or writing any result.
+    for target in targets:
+        protect_inputs(args.dataset, target)
+        if target.resolve() == args.config.resolve() or (target.exists() and target.samefile(args.config)):
+            raise InvalidDatasetError('output must not overwrite config input')
+    results = evaluate(dataset, config, variants, args.output/'split.json')
+    revision = subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True, check=False)
+    code_revision = revision.stdout.strip() if revision.returncode == 0 else 'unknown'
+    results = {key: replace(result, manifest=dict(result.manifest, code_revision=code_revision)) for key, result in results.items()}
+    for key, result in results.items():
+        output = args.output/key
+        output.mkdir(parents=True, exist_ok=True)
+        for name in ('trades', 'equity_curve', 'skips', 'unresolved_exposure'):
+            (output/(name+'.json')).write_text(json.dumps(to_jsonable(getattr(result, name)),
+                indent=2, sort_keys=True, allow_nan=False)+'\n', encoding='utf-8')
+        write_report(result, output)
+    write_comparison(results, plan, args.output)
+    print(f"Evaluation: {plan['status']}; {len(plan['complete_session_dates'])} complete sessions; {len(results)} attempted configurations.")
+    print('Frozen sensitivity scenarios; no parameter selection or profitability claim.')
+    print(f'Comparison written to {args.output}')
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="gamma_bot")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -60,6 +97,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     replay.add_argument('--config', type=Path, required=True)
     replay.add_argument('--variant', choices=('reversal', 'breakout', 'opening_range_baseline'), required=True)
     replay.add_argument('--output', type=Path, required=True)
+    evaluate_parser = commands.add_parser('evaluate', help='freeze and compare chronological MES hypotheses and sensitivities')
+    evaluate_parser.add_argument('--dataset', type=Path, required=True)
+    evaluate_parser.add_argument('--config', type=Path, required=True)
+    evaluate_parser.add_argument('--output', type=Path, required=True)
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
@@ -67,6 +108,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == 'replay':
             return _replay(args)
+        if args.command == 'evaluate':
+            return _evaluate(args)
         protect_inputs(args.dataset, args.output)
         dataset = load_dataset(args.dataset)
         report = audit_dataset(dataset, RULE_IDS)

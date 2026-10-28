@@ -91,3 +91,10 @@ metadata is absent: delivery-month exclusion is a conservative research
 restriction, not an asserted exchange rule. The report prominently retains that
 restriction and the replay's fill, liquidity, margin and roll limitations.
 See [replay policies](docs/research/replay.md) for the execution model.
+
+Chronological comparisons are available with `python -m gamma_bot evaluate
+--dataset PATH --config config/research.toml --output DIR`. The command freezes
+complete-session 70/30 dates and all actual sensitivity configurations before
+replay, retaining unsupported and zero-trade attempts. See
+[the evaluation policy and APIs](docs/research/evaluation.md). The included
+synthetic partial-session dataset produces a pipeline demonstration, not validation.

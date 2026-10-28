@@ -172,3 +172,57 @@ def write_report(result: ReplayResult, output_dir: Path) -> None:
          (dict(sequence=i, at=point.at, equity_cents=point.equity_cents) for i, point in enumerate(result.equity_curve)))
     _csv(output_dir / 'skips.csv', [f.name for f in fields(SkipRecord)], result.skips)
     (output_dir / 'report.html').write_text(html, encoding='utf-8')
+
+
+COMPARISON_FILES = ('comparison.json', 'comparison.html')
+
+
+def write_comparison(results, experiment_manifest, output_dir: Path) -> None:
+    """Compare every attempted run without selecting a winner or hiding gaps.
+
+    Study metadata lives here, separately from the replay report allowlists.
+    Source metadata is passed through the same credential/URL boundary as reports.
+    """
+    study = {key: experiment_manifest[key] for key in ('schema_version', 'status',
+        'selection_policy', 'completeness_rule', 'complete_session_dates', 'parts',
+        'variants', 'scenarios', 'input_hashes', 'dataset_sha256', 'limitations')}
+    runs = {}
+    for key, result in results.items():
+        part, variant, scenario = key.split('/')
+        metrics = compute_metrics(result)
+        baseline = results.get(f'{part}/opening_range_baseline/{scenario}')
+        baseline_metrics = compute_metrics(baseline) if baseline is not None else None
+        comparable = (baseline_metrics is not None and metrics['performance_available']
+            and baseline_metrics['performance_available']
+            and metrics['admissible_session_count'] == baseline_metrics['admissible_session_count'])
+        config = to_jsonable(result.manifest['config'])
+        runs[key] = {'part': part, 'family': study['variants'][variant]['family'],
+            'variant': result.manifest['variant'], 'scenario': scenario, 'metrics': metrics,
+            'session_dates': study['parts'][part], 'requested_session_count': len(study['parts'][part]),
+            'missing_rules': result.coverage.missing_rules,
+            'coverage_classification': result.coverage.classification,
+            'config_sha256': sha256(json.dumps(config, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest(),
+            'code_revision': result.manifest.get('code_revision', 'unknown'),
+            'net_pnl_difference_vs_baseline_cents': (metrics['net_pnl_cents'] - baseline_metrics['net_pnl_cents']) if comparable else None,
+            'diagnostics': _diagnostics(result, metrics),
+            'report': key+'/report.html'}
+    first = next(iter(results.values()), None)
+    payload = dict(study, runs=runs,
+        sources=_safe_sources(first.manifest.get('sources', {})) if first else {},
+        comparison_method='Matched calendar, initial capital, scenario and replay accounting. P&L differences are descriptive, not an edge estimate; unavailable comparisons are null.')
+    title = 'MES pipeline demonstration' if study['status'] == 'pipeline_demonstration' else 'MES chronological experiment comparison'
+    html = ('<!doctype html><html lang="en"><head><meta charset="utf-8"><title>' + title
+        + '</title></head><body><h1>' + title + '</h1><p>' + escape(payload['comparison_method'])
+        + '</p><ul>' + ''.join('<li>'+escape(x)+'</li>' for x in study['limitations'])
+        + '</ul><p><a href="comparison.json">All attempts and frozen configurations</a></p>'
+        + '<table><thead><tr><th>Part / variant / scenario</th><th>Family</th><th>Status</th><th>Sessions</th><th>Opportunities</th><th>Net cents</th><th>Missing rules</th></tr></thead><tbody>'
+        + ''.join('<tr><td><a href="'+escape(row['report'], quote=True)+'">'+escape(key)+'</a></td>'
+            + ''.join('<td>'+escape('unavailable' if x is None else str(x))+'</td>' for x in
+                (row['family'], row['metrics']['performance_status'], row['metrics']['admissible_session_count'],
+                 row['metrics']['trade_count'], row['metrics']['net_pnl_cents'], ', '.join(row['missing_rules'])))+'</tr>'
+                  for key, row in runs.items())
+        + '</tbody></table>' + _detail('Frozen study and provenance', payload) + '</body></html>\n')
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir/'comparison.json').write_text(_json(payload), encoding='utf-8')
+    (output_dir/'comparison.html').write_text(html, encoding='utf-8')

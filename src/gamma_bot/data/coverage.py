@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from .ordering import causally_precedes
 from .models import (CapabilityError, CoverageReport, Dataset, GexSnapshot, MesBar,
-                     PricePoint, Quote, RULE_IDS, Trade)
+                     PricePoint, Quote, RULE_IDS, RunConfig, Trade)
 
 
 ET = ZoneInfo("America/New_York")
@@ -46,12 +46,14 @@ def _has_wall_window(snapshots):
     return False
 
 
-def audit_dataset(dataset: Dataset, required_rules: frozenset[str]) -> CoverageReport:
+def audit_dataset(dataset: Dataset, required_rules: frozenset[str], *,
+                  config: RunConfig | None = None) -> CoverageReport:
     """Report potential rule inputs; per-decision freshness and causality still apply.
 
     A common date is a necessary overlap check, not a claim of complete intraday
     coverage. Synthetic/indicative/unknown data never classify as full evidence.
     """
+    cfg = config or RunConfig()
     if required_rules - RULE_IDS:
         raise CapabilityError("unknown required rule IDs: " + ", ".join(sorted(required_rules - RULE_IDS)))
     dates = {r: set() for r in RULE_IDS}
@@ -96,7 +98,7 @@ def audit_dataset(dataset: Dataset, required_rules: frozenset[str]) -> CoverageR
                         timedelta(0) <= at - q.event_at <= timedelta(seconds=60)):
                     paired[(_day(at), q.contract)].add(_minute(at))
         for (day, _), minutes in paired.items():
-            if any(sum(timedelta(0) <= end - m < timedelta(minutes=5) for m in minutes) >= 5 for end in minutes):
+            if any(sum(timedelta(0) <= end - m < timedelta(seconds=cfg.mapping_window_seconds) for m in minutes) >= max(5, cfg.mapping_min_pairs) for end in minutes):
                 dates["mapping"].add(day)
     groups = defaultdict(list)
     for e in gex:
@@ -129,6 +131,9 @@ def audit_dataset(dataset: Dataset, required_rules: frozenset[str]) -> CoverageR
 
     supported = frozenset(rule for rule, days in dates.items() if days)
     missing = {rule: REASONS[rule] for rule in sorted(required_rules - supported)}
+    if 'mapping' in missing and (cfg.mapping_window_seconds, cfg.mapping_min_pairs) != (300, 5):
+        missing['mapping'] = (f'Missing {max(5, cfg.mapping_min_pairs)} contemporaneous actual underlying '
+            f'midpoints paired with MES quotes in {cfg.mapping_window_seconds} trailing seconds.')
     common = set.intersection(*(dates[r] for r in required_rules)) if required_rules else set()
     freshness, gaps = {}, {}
     for source in sorted({e.source_id for e in dataset.events}):

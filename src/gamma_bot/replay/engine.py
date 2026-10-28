@@ -7,11 +7,12 @@ are a labeled next-open approximation recorded at their actual availability;
 entry-bar protection resolves OHLC stop first. Exact fill lots are retained.
 """
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta
 from decimal import ROUND_CEILING
 import re
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from gamma_bot.data.coverage import audit_dataset
 from gamma_bot.data.models import (
@@ -103,7 +104,8 @@ class _Lot:
 
 
 class _Replay:
-    def __init__(self, dataset, config, variant, strategies, coverage):
+    def __init__(self, dataset, config, variant, strategies, coverage, admitted_session_dates=None):
+        self.admitted_session_dates = admitted_session_dates
         self.data, self.config, self.variant = dataset, config, variant
         self.strategies, self.coverage = strategies, coverage
         self.account = Account(config.initial_equity_cents, daily_loss_fraction=config.daily_loss_fraction)
@@ -121,7 +123,14 @@ class _Replay:
         self.margin_used = []
         self.count = 0
 
+    def admitted(self, now):
+        return self.admitted_session_dates is None or (
+            self.session is not None and self.session.session_date in self.admitted_session_dates
+            and now.astimezone(ZoneInfo('America/New_York')).date() == self.session.session_date)
+
     def skip(self, now, reason, signal=None):
+        if not self.admitted(now):
+            return
         self.skips.append(SkipRecord(at=now, reason=reason,
             strategy=signal.strategy if signal else None,
             contract=signal.contract if signal else self.active,
@@ -175,12 +184,13 @@ class _Replay:
                 previous = ordered[index-1] if index else None
                 old = self.active
                 self.active, reasons = self.roll.select(current, previous, now)
-                self.roll_history.append({'at': now, 'contract': self.active, 'reasons': reasons})
+                if self.admitted(now):
+                    self.roll_history.append({'at': now, 'contract': self.active, 'reasons': reasons})
                 for reason in reasons:
                     self.skip(now, reason)
                 if old != self.active:
                     self.features = FeatureEngine(self.config)
-        if self.session is None:
+        if self.session is None or not self.admitted(now):
             return
         deadline = flatten_deadline(self.session, self.releases(self.session), now, config=self.config)
         if now >= deadline:
@@ -395,9 +405,15 @@ class _Replay:
         timeline.extend((e.available_at, e) for e in events)
         timeline.sort(key=lambda row: (row[0], 0 if row[1] is None else 1,
             row[1].event_at if row[1] else row[0], row[1].source_id if row[1] else '', row[1].sequence if row[1] else 0))
-        self.equity.append(EquityPoint(at=first, equity_cents=self.account.equity_cents))
+        if self.admitted_session_dates is None:
+            self.equity.append(EquityPoint(at=first, equity_cents=self.account.equity_cents))
+        last_admitted = max(self.admitted_session_dates) if self.admitted_session_dates else None
         for now, event in timeline:
+            if last_admitted is not None and now.astimezone(ZoneInfo('America/New_York')).date() > last_admitted:
+                break
             self.clock(now)
+            if self.admitted_session_dates is not None and self.admitted(now) and not self.equity:
+                self.equity.append(EquityPoint(at=now, equity_cents=self.account.equity_cents))
             if event is None:
                 continue
             if isinstance(event, MesBar):
@@ -405,6 +421,9 @@ class _Replay:
                     if session.open_at <= event.start_at < session.close_at:
                         self.roll.observe(event, session)
                         break
+            if (not self.admitted(now) or self.admitted_session_dates is not None
+                    and event.event_at.astimezone(ZoneInfo('America/New_York')).date() not in self.admitted_session_dates):
+                continue
             contract = getattr(event, 'contract', None)
             if isinstance(event, PricePoint) and re.fullmatch(r'MES(?:[HMUZ]\d{1,4}|\d{4}[HMUZ])', event.symbol):
                 contract = event.symbol
@@ -461,18 +480,34 @@ class _Replay:
 
 
 def run_replay(dataset: Dataset, config: RunConfig, variant: Variant, *,
-               strategies: Sequence[Strategy]) -> ReplayResult:
+               strategies: Sequence[Strategy],
+               admitted_session_dates: Sequence[date] | None = None) -> ReplayResult:
     """Run one declared experiment; unsupported requests return diagnostics only.
 
     Each strategy must belong to the supplied experiment. Reduced experiments
     require their explicitly declared inputs plus common macro/margin evidence.
     A supported audit establishes potential; every decision still gates runtime.
+    admitted_session_dates optionally keeps other dates as roll-volume evidence
+    only: no decisions, trades, equity/time or reported session counts. Coverage
+    is audited on admitted dates, and future dates cannot alter their account.
     """
     if not strategies or any(s.variant != variant for s in strategies):
         raise InvalidDatasetError('provide strategy instances matching the requested variant')
     required = frozenset().union(*(s.required_rules for s in strategies), {'macro', 'margin'})
-    coverage = audit_dataset(dataset, required)
-    replay = _Replay(dataset, config, variant, strategies, coverage)
+    # Keep preceding bars for causal roll selection, but do not let warm-up
+    # feature availability establish the evaluated period's input capabilities.
+    admitted = None if admitted_session_dates is None else frozenset(admitted_session_dates)
+    audit_data = dataset
+    if admitted is not None:
+        if not admitted <= {s.session_date for s in dataset.sessions}:
+            raise InvalidDatasetError('admitted dates must have session schedules')
+        et = ZoneInfo('America/New_York')
+        audit_data = replace(dataset,
+            events=tuple(e for e in dataset.events if e.available_at.astimezone(et).date() in admitted
+                         and e.event_at.astimezone(et).date() in admitted),
+            sessions=tuple(s for s in dataset.sessions if s.session_date in admitted))
+    coverage = audit_dataset(audit_data, required, config=config)
+    replay = _Replay(dataset, config, variant, strategies, coverage, admitted)
     if coverage.missing_rules or not coverage.intersection_dates:
         return replay.result('unsupported')
     return replay.run()
