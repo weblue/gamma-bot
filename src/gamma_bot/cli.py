@@ -1,5 +1,6 @@
 """Offline research commands."""
 import argparse
+from dataclasses import replace
 import json
 from pathlib import Path
 import sys
@@ -15,6 +16,7 @@ from .data.provenance import protect_inputs, to_jsonable
 
 def _replay(args) -> int:
     from .replay.engine import run_replay
+    from .research.report import REPORT_FILES, write_report
     from .strategies import ReversalStrategy, BreakoutStrategy, OpeningRangeBaseline
 
     config = load_config(args.config)
@@ -27,8 +29,8 @@ def _replay(args) -> int:
                 ('trades', 'equity_curve', 'skips', 'unresolved_exposure', 'coverage', 'manifest')}
     revision = subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True, check=False)
     payloads['manifest'] = dict(result.manifest, code_revision=revision.stdout.strip() if revision.returncode == 0 else 'unknown')
-    for name in payloads:
-        target = args.output / (name + '.json')
+    for filename in sorted(set(REPORT_FILES) | {name + '.json' for name in payloads}):
+        target = args.output / filename
         protect_inputs(args.dataset, target)
         if target.resolve() == args.config.resolve() or (
                 target.exists() and target.samefile(args.config)):
@@ -37,6 +39,7 @@ def _replay(args) -> int:
     for name, payload in payloads.items():
         (args.output / (name + '.json')).write_text(
             json.dumps(to_jsonable(payload), indent=2, sort_keys=True, allow_nan=False) + '\n', encoding='utf-8')
+    write_report(replace(result, manifest=payloads['manifest']), args.output)
     print(f"Replay: {result.manifest['status']}; {len(result.trades)} closed trade slices; coverage {result.coverage.classification}.")
     for rule, reason in result.coverage.missing_rules.items():
         print(f'Missing {rule}: {reason}')
