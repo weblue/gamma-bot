@@ -41,3 +41,23 @@ def test_cli_supported_synthetic_coverage_returns_zero_with_synthetic_label(comp
     assert report["classification"] == "synthetic"
     assert report["real"] is False and report["missing_rules"] == {}
     assert "synthetic" in capsys.readouterr().out
+
+
+def test_record_explicitly_reports_no_verified_source_and_writes_nothing(tmp_path, capsys):
+    from gamma_bot.cli import main
+    output = tmp_path / 'events.jsonl'
+    checkpoint = tmp_path / 'checkpoint.json'
+    assert main(['record', '--output', str(output), '--checkpoint', str(checkpoint),
+                 '--stop-at', '2026-10-28T15:00:00Z']) == 2
+    diagnostic = capsys.readouterr().out
+    assert 'no_verified_source' in diagnostic
+    assert 'No verified free permitted' in diagnostic
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_record_rejects_naive_stop_time_without_writing(tmp_path, capsys):
+    from gamma_bot.cli import main
+    assert main(['record', '--output', str(tmp_path/'events.jsonl'), '--checkpoint',
+                 str(tmp_path/'checkpoint.json'), '--stop-at', '2026-10-28T15:00:00']) == 1
+    assert 'aware' in capsys.readouterr().err
+    assert list(tmp_path.iterdir()) == []

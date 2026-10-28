@@ -6,6 +6,9 @@
 audit_date = "2026-10-26"
 budget_usd = 0
 outcome = "no_gex_history"
+forward_recording_status = "no_verified_source"
+selected_forward_source = "unavailable"
+# Generic recorder fixtures are tests only; no production adapter is registered.
 selected_gex_source = "unavailable"
 selected_gex_model = "unavailable"
 selected_expiry_universe = "unavailable"

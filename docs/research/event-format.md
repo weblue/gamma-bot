@@ -194,3 +194,62 @@ the accepted defaults. Integer cents/ticks reject floats and booleans. Risk may
 be reduced but cannot exceed 1%, daily loss shutdown cannot exceed 3%, and
 `required_rules` cannot silently drop filters. Named strategy variants belong to
 the strategy layer. No fee or margin scenario is a provider quote.
+
+## Forward recorder contract and current availability
+
+`gamma_bot.data.adapters.SourceAdapter` is a protocol with
+`events() -> Iterator[Event]` and `capabilities -> CoverageReport`.
+`gamma_bot.data.recorder.record(adapter, output: Path, checkpoint: Path, *,
+stop_at: datetime) -> CoverageReport` runs synchronously in the foreground.
+It opens no source itself, starts no service, and reads no credentials. The
+source audit established **no verified free permitted production adapter**.
+Test fixture streams are synthetic mechanics tests, never enabled feeds.
+
+`python -m gamma_bot record --output events.jsonl --checkpoint checkpoint.json
+--stop-at 2026-10-28T20:00:00Z` validates an aware stop timestamp, prints
+`no_verified_source`, returns exit 2, and writes nothing. Existing audit/replay/
+evaluate commands retain their behavior. No provider selection, private endpoint,
+trial, broker connection or credential lookup is available in this release.
+
+An adapter must emit typed, credential-free events, use stable source-wide
+sequence identities across connections, bound its blocking reads to honor the
+caller's deadline, and release resources when its iterator is closed. A normal
+iterator exhaustion ends this bounded sample. Only disconnects/timeouts and
+`RateLimited` are retried: at most three reconnects total, with 0.1/0.2/0.4-second
+backoff capped by remaining time. Adapter failures are replaced by fixed safe
+messages without raw exception context. Credentials must never be embedded in
+source IDs, event text or capabilities; the generic recorder neither obtains
+nor guesses secret values. Capabilities do not supply missing observations or
+certify historical provenance.
+
+The caller must give one process exclusive ownership of the output JSONL,
+its `.metadata.json` sidecar, and checkpoint. These three paths must differ,
+including hard-link aliases. The event file is restart truth: source/sequence
+identities and SHA-256 content hashes are rebuilt from its validated records.
+A redelivery with unchanged source content is ignored, even if its availability
+was changed by receipt timing; a conflicting sequence fails. Other event fields
+including actual event time remain intact. Every new event receives
+`available_at = max(adapter.available_at, recorder receipt time)`. Thus reconnect
+backlogs cannot become actionable before they were observed. Future availability
+beyond the requested stop is skipped with an explicit warning.
+
+Each event append is flushed/fsynced before an atomic checkpoint replacement.
+The checkpoint records the durable byte offset, prefix SHA-256 and structured
+gaps; it contains no provider state or credentials. Restart deduplication does
+not depend on a current checkpoint. A stale valid prefix checkpoint is usable;
+a malformed/mismatched checkpoint is copied to a recoverable, fsynced
+`.quarantine-*` file before replacement. A malformed final event line also causes
+a complete original-file quarantine before prefix repair. Interior corruption
+fails without modifying the event file. Complete unterminated final records are
+preserved and separated with a newline before appending. Quarantines retain
+original bytes and must be treated as raw input artifacts, not public reports.
+
+Disconnect, retry exhaustion, skipped-sequence, recovery and restart warnings
+persist in metadata limitations. Structured recording gaps are retained in the
+checkpoint and unioned with cadence gaps in the returned coverage report. A
+subsequent `load_dataset`/audit preserves the prominent metadata warnings but
+**does not reconstruct the checkpoint's structured gaps**. Event-time cadence
+gaps remain independently auditable. Neither successful parsing, reconnect nor
+sequence continuity certifies an uninterrupted usable feed, historical data,
+full strategy coverage, or 1–5-minute wall freshness. No production sample or
+measured provider cadence is claimed.

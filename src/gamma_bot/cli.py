@@ -1,5 +1,6 @@
 """Offline research commands."""
 import argparse
+from datetime import datetime
 from dataclasses import replace
 import json
 from pathlib import Path
@@ -101,11 +102,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     evaluate_parser.add_argument('--dataset', type=Path, required=True)
     evaluate_parser.add_argument('--config', type=Path, required=True)
     evaluate_parser.add_argument('--output', type=Path, required=True)
+    record_parser = commands.add_parser('record', help='report forward recording source availability')
+    record_parser.add_argument('--output', type=Path, required=True)
+    record_parser.add_argument('--checkpoint', type=Path, required=True)
+    record_parser.add_argument('--stop-at', required=True)
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
         return 0 if exc.code == 0 else 1
     try:
+        if args.command == 'record':
+            try:
+                stop = datetime.fromisoformat(args.stop_at.replace('Z', '+00:00'))
+                if stop.tzinfo is None or stop.utcoffset() is None:
+                    raise ValueError
+            except ValueError:
+                raise InvalidDatasetError('stop-at must be an aware ISO timestamp') from None
+            print('no_verified_source: No verified free permitted automated production source was established by the source audit. No recorder started; no files written.')
+            return 2
         if args.command == 'replay':
             return _replay(args)
         if args.command == 'evaluate':
