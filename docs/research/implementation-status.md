@@ -1,9 +1,9 @@
 # MES research implementation status
 
-The nine-task research plan is implemented on `codex/mes-research-mvp`.
+The nine-task research plan is merged into local `main`.
 Individual task reviews and final whole-branch acceptance are complete. All seven
 final findings were fixed and independently re-reviewed; no open findings remain.
-Branch integration awaits the user's choice.
+The user authorized local integration; the feature history was preserved by a fast-forward merge.
 This is an offline research release. It does not connect to IBKR or submit orders.
 
 ## Delivered
