@@ -12,6 +12,16 @@ demonstration**, not strategy validation: it contains preceding-session roll
 volume and only a partial observed trading session. No verified historical GEX
 intersection has been established, and this command does not fabricate one.
 
+Study preflight validates one canonical actual GEX source/model/underlying/expiry
+universe/provenance across all supplied inputs before any split or report is
+written. Contradictory metadata or a change between development and holdout is
+invalid. The study, comparison and every per-part run retain the same
+`gex_identity`, including a part before the first snapshot or an unsupported
+attempt; this is experiment provenance and never future feature availability.
+No snapshots means an explicit `unselected` identity. Separate identities require
+separate datasets/studies. Existing frozen studies need a new output path because
+the experiment manifest now includes this validated identity.
+
 The command writes `split.json` and `experiments.json` **before** running any
 replay. The split sorts unique complete session dates, assigns the first
 floor(70%) to development and the remainder to evaluation, and requires at least
@@ -116,4 +126,4 @@ sessions solely as roll-volume warm-up, audits coverage on admitted dates, and
 excludes later dates from the account. An empty tuple admits no results.
 `audit_dataset` accepts optional keyword `config: RunConfig | None`; only the
 mapping capability window/minimum are configured. Without it the established
-default audit semantics remain unchanged.
+default mapping window/minimum apply; the shared causal pairing and selected-contract runtime margin gates still apply.

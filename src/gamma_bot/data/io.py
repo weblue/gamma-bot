@@ -9,6 +9,7 @@ from types import UnionType
 from typing import Literal, Union, get_args, get_origin, get_type_hints
 from urllib.parse import urlsplit
 
+from .semantics import experiment_gex_identity
 from .models import (Dataset, GexSnapshot, InvalidDatasetError, MacroRelease,
                      MarginPoint, MesBar, NegativeRegion, OptionRow, OptionSnapshot,
                      PricePoint, Quote, RULE_IDS, Session, Trade, Wall)
@@ -21,7 +22,7 @@ TABLE_TYPES = {"sessions": Session, "macro_releases": MacroRelease, "margin_poin
 SOURCE_FIELDS = frozenset({"source_id", "classification", "limitations", "availability_verified",
                           "timestamp_semantics", "model_semantics", "roll_policy", "interval_seconds",
                           "documentation_url", "homepage", "reuse_status", "model_id", "expiry_days",
-                          "profile_boundary_convention", "gex_units", "ingested_at"})
+                          "profile_boundary_convention", "gex_units", "ingested_at", "underlying", "provenance"})
 
 
 def _object(pairs):
@@ -219,6 +220,7 @@ def load_dataset(path: Path, *, as_of: datetime | None = None) -> Dataset:
                        "macro_releases": lambda r: r.event_id,
                        "margin_points": lambda r: (r.contract, r.available_at)}[name]
                 tables[name] = _dedupe(rows, key)
+        experiment_gex_identity(Dataset(events=tuple(events), source_metadata=sources))
         if as_of is not None:
             events = [e for e in events if e.available_at <= as_of]
             for name in tables:

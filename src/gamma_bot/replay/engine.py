@@ -15,6 +15,7 @@ from typing import Literal
 from zoneinfo import ZoneInfo
 
 from gamma_bot.data.coverage import audit_dataset
+from gamma_bot.data.semantics import experiment_gex_identity
 from gamma_bot.data.models import (
     CoverageReport, Dataset, InvalidDatasetError, MesBar, PricePoint, Quote, RunConfig, freeze,
 )
@@ -109,7 +110,9 @@ class _Replay:
         self.data, self.config, self.variant = dataset, config, variant
         self.strategies, self.coverage = strategies, coverage
         self.account = Account(config.initial_equity_cents, daily_loss_fraction=config.daily_loss_fraction)
-        self.features = FeatureEngine(config)
+        self.features = FeatureEngine(config, source_metadata=dataset.source_metadata)
+        self.gex_identity = experiment_gex_identity(dataset)
+        self.missing_active_margin = False
         self.roll = RollSelector()
         self.session = None
         self.active = None
@@ -163,7 +166,7 @@ class _Replay:
         if self.lots and self.forced is None:
             self.forced = now, reason
             self.skip(now, reason, self.lots[0].signal)
-            if reason in ('maintenance_deficit', 'risk_breach'):
+            if reason in ('maintenance_deficit', 'initial_margin_deficit', 'risk_breach'):
                 for lot in self.lots:
                     lot.risk_breach = True
 
@@ -189,7 +192,7 @@ class _Replay:
                 for reason in reasons:
                     self.skip(now, reason)
                 if old != self.active:
-                    self.features = FeatureEngine(self.config)
+                    self.features = FeatureEngine(self.config, source_metadata=self.data.source_metadata)
         if self.session is None or not self.admitted(now):
             return
         deadline = flatten_deadline(self.session, self.releases(self.session), now, config=self.config)
@@ -237,7 +240,7 @@ class _Replay:
                 # Only the new liquidation order needs to wait. Protection that
                 # was active during this bar remains valid independently.
                 eligible = not (
-                    reason in ('maintenance_deficit', 'risk_breach') and event.available_at <= at
+                    reason in ('maintenance_deficit', 'initial_margin_deficit', 'risk_breach') and event.available_at <= at
                     or event.event_at < at or isinstance(event, MesBar) and event.start_at < at)
                 if eligible:
                     price_reason = executable_price(event, 'sell' if lot.signal.direction == 'long' else 'buy'), reason
@@ -312,9 +315,22 @@ class _Replay:
                             TICK_VALUE_CENTS*l.remaining + self.config.round_trip_fee_cents*l.remaining for l in self.lots)
         budget = int(self.account.equity_cents*self.config.risk_fraction)-existing_risk
         cost = (distance+2*self.config.slippage_ticks)*TICK_VALUE_CENTS+self.config.round_trip_fee_cents
-        quantity = min(pending.remaining, max(0, budget//cost))
+        # Reprice held collateral and the proposed fill at its executable mark.
+        # The order's own unfilled reservation is released for this calculation;
+        # held collateral remains committed. Fees/spread/slippage reduce equity.
+        direction = 1 if side == 'buy' else -1
+        mark = ((event.bid_ticks if direction == 1 else event.ask_ticks)
+                if isinstance(event, Quote) else event.open_ticks)
+        execution_equity = self.account.cash_cents + sum(
+            (mark-l.entry.price_ticks)*direction*TICK_VALUE_CENTS*l.remaining for l in self.lots)
+        capital = min(self.account.equity_cents, execution_equity)
+        held = self.account.reserved_margin_cents-pending.remaining*pending.margin_cents
+        entry_price = executable_price(event, side)+direction*self.config.slippage_ticks
+        entry_drag = self.config.round_trip_fee_cents//2 + max(0, (entry_price-mark)*direction)*TICK_VALUE_CENTS
+        affordable = max(0, (capital-held)//(margin.initial_cents+entry_drag))
+        quantity = min(pending.remaining, max(0, budget//cost), affordable)
         if quantity == 0:
-            self.cancel(event.available_at, 'zero_size_at_execution')
+            self.cancel(event.available_at, 'initial_margin_unaffordable' if affordable == 0 else 'zero_size_at_execution')
             return False
         fill = entry_fill(signal, event, self.account, self.config, order_id=pending.order_id, quantity=quantity)
         if fill is None:
@@ -340,6 +356,10 @@ class _Replay:
             # before evaluating protection that became active at that open.
             self.account.mark(event.open_ticks)
             self.equity.append(EquityPoint(at=event.available_at, equity_cents=self.account.equity_cents))
+        if self.pending and self.account.reserved_margin_cents > self.account.equity_cents:
+            self.cancel(event.available_at, 'pending_initial_margin_exceeded')
+        if abs(self.account.position_quantity)*margin.initial_cents > self.account.equity_cents:
+            self.force(event.available_at, 'initial_margin_deficit')
         risk = sum(((abs(l.entry.price_ticks-l.signal.stop_ticks)+self.config.slippage_ticks)*TICK_VALUE_CENTS +
                     self.config.round_trip_fee_cents)*l.remaining for l in self.lots)
         if self.pending and risk + self.pending.remaining*self.pending.planned_per_contract > int(
@@ -433,6 +453,9 @@ class _Replay:
             market = isinstance(event, (Quote, MesBar))
             fresh = market and event.event_at >= self.last_market_at.get(contract, event.event_at)
             if fresh:
+                if contract == self.active and self.margin(contract, now) is None:
+                    self.missing_active_margin = True
+                    self.skip(now, 'margin_unavailable')
                 self.last_market_at[contract] = event.event_at
                 if isinstance(event, MesBar):
                     # Existing protection was active inside the completed bar,
@@ -454,6 +477,10 @@ class _Replay:
         return self.result('complete')
 
     def result(self, status):
+        if self.missing_active_margin:
+            status = 'unsupported'
+            self.coverage = replace(self.coverage, missing_rules={**self.coverage.missing_rules,
+                'margin': 'Missing causal margin on the actual selected execution stream.'})
         unresolved = {}
         if self.lots or self.pending:
             unresolved = {'position_quantity': self.account.position_quantity,
@@ -465,7 +492,7 @@ class _Replay:
         manifest = {'schema_version': 1, 'status': status, 'variant': self.variant,
             'experiment_scope': 'reduced' if self.variant.omitted_rules else 'full',
             'config': self.config, 'input_hashes': self.data.input_hashes,
-            'sources': self.data.source_metadata, 'coverage': self.coverage,
+            'sources': self.data.source_metadata, 'gex_identity': self.gex_identity, 'coverage': self.coverage,
             'limitations': (*self.data.limitations, *LIQUIDITY_ASSUMPTIONS,
                 'Delivery-month contracts excluded without verified expiry metadata; valid pre-expiry sessions may be lost.',
                 'Roll volume requires every regular-session one-minute bar for current and next quarter; missing comparison excludes session.'),

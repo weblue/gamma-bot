@@ -94,13 +94,33 @@ separately named approximation and cannot silently qualify.
 `Wall` objects contain `wall_id`, `kind` (`support`/`resistance`), Decimal `strike`
 and absolute Decimal `concentration`. `NegativeRegion` objects contain Decimal or
 null `lower`/`upper` and `region_id`; null is an unbounded side. Finite bounds must
-increase. Source metadata must document boundary membership, model and units.
+increase. The only supported normalized `profile_boundary_convention` is the
+exact string `lower inclusive, upper exclusive`. Both audit and replay require
+that declaration for negative-profile capability. Missing, opposite or unknown
+conventions cannot certify an all-positive profile or a negative region. The
+importer preserves the original endpoints; it never converts opposite membership
+by merely changing a label. A provider whose exact zero/sign-change endpoints do
+not satisfy this convention needs an explicitly validated normalization before
+full breakout research. Under the canonical convention a mapped lower endpoint
+belongs to the region and an upper endpoint does not; no epsilon is added.
+Source metadata must also document model semantics and units.
 An available all-positive profile has `profile_available=true` and no negative
 regions. An unavailable profile has `profile_available=false` and no regions;
 it does not establish absence of negative gamma. IDs within a snapshot are unique.
 The expiry universe is distinct nonnegative day offsets; the chosen experiment
 must explicitly select its intended universe. No universe/model is selected by
 the current feasibility audit. OI must be published by snapshot availability.
+
+Every supplied experiment must contain a single actual GEX identity: source ID,
+model ID, underlying, expiry-day universe (sorted for canonical identity), and
+vendor/modeled/indicative provenance. Import validates this before an `as_of`
+cutoff; audit, direct replay and study preflight also validate it. Optional source
+metadata fields `model_id`, `expiry_days`, `underlying`, `provenance` and
+`source_id` must agree with actual snapshots. A run with no snapshots records
+`gex_identity: {"status": "unselected"}`; source labels alone cannot select one.
+Otherwise run and study artifacts record `status: "selected"` with the five
+actual identity fields, including zero-trade and unsupported attempts. This
+provenance validation does not admit future snapshots into feature decisions.
 
 `OptionRow` contains `kind` (`call`/`put`), Decimal `strike`, `expires_at`, integer
 `multiplier`/`oi`, `oi_published_at`, and finite nonnegative `gamma`/`iv` or null.
@@ -162,6 +182,17 @@ rule IDs `mes_prices`, `gex`, `negative_regions`, `mapping`, `cvd`, `vix`,
 `supported_rules` records input potential; `missing_rules` maps required missing
 inputs to readable reasons. `intersection_dates` are common New York dates with
 all requested input capabilities, not a promise of complete intraday overlap.
+Mapping admission uses the same midpoint history and causal mapper as runtime.
+Actual dated-MES `price_point` midpoints and quote-derived midpoints both qualify;
+sources/contracts cannot pool minutes, indicative prices do not qualify, and
+same event-minute pairing, availability, latest-pair freshness and configured
+minimum/window rules all apply. An ambiguous source stream fails closed.
+
+Margin capability requires a causally covered individual execution stream, not
+margin for every adjacent-contract bar used only as roll evidence. Replay still
+requires exact selected-contract margin at the actual clock; missing active
+margin makes performance unavailable, including otherwise flat zero-trade runs.
+
 The audit checks minimal warm-up and cadence for mapping, VIX, opening range and
 wall observations. Every later decision must still apply causal joins, exact
 freshness, filter semantics and execution gates. Coverage alone never passes a

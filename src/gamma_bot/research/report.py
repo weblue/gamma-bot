@@ -14,7 +14,7 @@ from .metrics import compute_metrics, opportunity_key
 
 REPORT_FILES = ('manifest.json', 'coverage.json', 'trades.csv', 'equity.csv', 'skips.csv', 'report.html')
 _MANIFEST_FIELDS = frozenset({'schema_version', 'status', 'variant', 'experiment_scope', 'config',
-    'input_hashes', 'sources', 'coverage', 'limitations', 'roll_history', 'excluded_sessions',
+    'input_hashes', 'sources', 'gex_identity', 'coverage', 'limitations', 'roll_history', 'excluded_sessions',
     'margin_used', 'ending_reserved_margin_cents', 'ending_equity_cents',
     'gross_realized_pnl_cents', 'fees_cents', 'code_revision'})
 _METHODS = (
@@ -137,6 +137,8 @@ def write_report(result: ReplayResult, output_dir: Path) -> None:
     # Serialize before writing, so non-finite or otherwise invalid evidence cannot
     # leave a seemingly successful partial manifest.
     manifest_text, coverage_text = _json(manifest), _json(result.coverage)
+    capital = to_jsonable(manifest['config'])['initial_equity_cents']
+    capital_label = f'{capital//100:,}.{capital%100:02d}'
     html = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         '<title>MES offline research evidence</title><style>'
@@ -145,7 +147,7 @@ def write_report(result: ReplayResult, output_dir: Path) -> None:
         'table{border-collapse:collapse;background:white;width:100%}th,td{text-align:left;border:1px solid #cbd4db;padding:.35rem .7rem}'
         'th{width:50%}pre{white-space:pre-wrap;overflow-wrap:anywhere}details{margin:1rem 0;padding:.7rem;background:#edf2f5}'
         '</style></head><body><h1>MES offline research evidence</h1>'
-        '<p>USD 10,000 starting simulated capital. Research release; no proven profitability claim.</p>'
+        f'<p>USD {capital_label} starting simulated capital. Research release; no proven profitability claim.</p>'
         '<h2>Evidence and limitations</h2><ul class="diagnostics">'
         + ''.join('<li>' + escape(message) + '</li>' for message in manifest['report_diagnostics']) + '</ul>'
         + '<h2>Outcome</h2>' + _table(metrics.items())
@@ -156,7 +158,8 @@ def write_report(result: ReplayResult, output_dir: Path) -> None:
         '<a href="equity.csv">Every observed equity mark</a> · <a href="skips.csv">Skip diagnostics</a> · '
         '<a href="coverage.json">Coverage JSON</a> · <a href="manifest.json">Manifest JSON</a></p>'
         + _detail('Trade slices: planned versus realized risk', trades)
-        + _detail('Source, model and expiry metadata', manifest['sources'])
+        + _detail('Actual experiment GEX identity', manifest.get('gex_identity', {'status': 'unselected'}))
+        + _detail('Source metadata', manifest['sources'])
         + _detail('Coverage and missing rules', result.coverage)
         + _detail('Contract selection, roll and excluded sessions', {'roll_history': manifest.get('roll_history', ()),
             'excluded_sessions': manifest.get('excluded_sessions', ())})
@@ -184,7 +187,7 @@ def write_comparison(results, experiment_manifest, output_dir: Path) -> None:
     Source metadata is passed through the same credential/URL boundary as reports.
     """
     study = {key: experiment_manifest[key] for key in ('schema_version', 'status', 'completeness_policy_version',
-        'selection_policy', 'completeness_rule', 'complete_session_dates', 'parts',
+        'selection_policy', 'gex_identity', 'completeness_rule', 'complete_session_dates', 'parts',
         'variants', 'scenarios', 'input_hashes', 'dataset_sha256', 'limitations')}
     runs = {}
     for key, result in results.items():
@@ -197,7 +200,7 @@ def write_comparison(results, experiment_manifest, output_dir: Path) -> None:
             and metrics['admissible_session_count'] == baseline_metrics['admissible_session_count'])
         config = to_jsonable(result.manifest['config'])
         runs[key] = {'part': part, 'family': study['variants'][variant]['family'],
-            'variant': result.manifest['variant'], 'scenario': scenario, 'metrics': metrics,
+            'variant': result.manifest['variant'], 'gex_identity': result.manifest.get('gex_identity', {'status':'unselected'}), 'scenario': scenario, 'metrics': metrics,
             'session_dates': study['parts'][part], 'requested_session_count': len(study['parts'][part]),
             'missing_rules': result.coverage.missing_rules,
             'coverage_classification': result.coverage.classification,

@@ -7,7 +7,8 @@ import re
 from statistics import median
 from typing import Literal
 
-from gamma_bot.data.models import GexSnapshot, InvalidDatasetError, PricePoint, RunConfig
+from gamma_bot.data.semantics import snapshot_identity
+from gamma_bot.data.models import GexSnapshot, InvalidDatasetError, PricePoint, Quote, RunConfig
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -32,6 +33,43 @@ class MappedGex:
     walls: tuple[MappedWall, ...]
     negative_regions: tuple[MappedRegion, ...]
     available_at: datetime
+
+
+def quote_midpoint(quote: Quote) -> PricePoint:
+    return PricePoint(source_id=quote.source_id, sequence=quote.sequence,
+        event_at=quote.event_at, available_at=quote.available_at, symbol=quote.contract,
+        value=Decimal(quote.bid_ticks+quote.ask_ticks)/8, price_kind='mid')
+
+
+class MidpointHistory:
+    """One source per symbol; latest causal observation per event-time minute."""
+    def __init__(self, config: RunConfig, window_minutes: int | None = None):
+        self.config, self.window_minutes = config, window_minutes
+        self.points = {}
+        self.sources = {}
+
+    def update(self, point: PricePoint, as_of: datetime) -> None:
+        if point.price_kind != 'mid':
+            return
+        source = self.sources.setdefault(point.symbol, point.source_id)
+        if source != point.source_id:
+            raise InvalidDatasetError('mapping midpoint source switch requires a separate feature engine')
+        minute = point.event_at.replace(second=0, microsecond=0)
+        points = self.points.setdefault(point.symbol, {})
+        old = points.get(minute)
+        if old is None or (point.event_at, point.available_at, point.sequence) > (
+                old.event_at, old.available_at, old.sequence):
+            points[minute] = point
+        seconds = (self.window_minutes*60 if self.window_minutes is not None
+                   else self.config.mapping_window_seconds)
+        cutoff = as_of-timedelta(seconds=seconds)
+        for symbol in self.points:
+            self.points[symbol] = {m: p for m, p in self.points[symbol].items() if p.event_at >= cutoff}
+
+    def mapped(self, snapshot: GexSnapshot, contract: str, as_of: datetime) -> MappedGex | None:
+        mes, spy = self.points.get(contract, {}), self.points.get('SPY', {})
+        pairs = [(mes[m], spy[m]) for m in sorted(mes.keys() & spy.keys())]
+        return map_levels(snapshot, pairs, as_of, window_minutes=self.window_minutes, config=self.config)
 
 
 def map_levels(snapshot: GexSnapshot,
@@ -131,8 +169,7 @@ def stable_wall(history: Sequence[MappedGex], wall_id: str, as_of: datetime, *,
     identities, strikes, concentrations, levels = set(), set(), [], []
     for mapped in selected:
         snap = mapped.snapshot
-        identities.add((snap.source_id, snap.model_id, snap.underlying,
-                        snap.expiry_days, snap.provenance))
+        identities.add(tuple(snapshot_identity(snap).values()))
         source_wall = next((w for w in snap.walls if w.wall_id == wall_id), None)
         wall = next((w for w in mapped.walls if w.wall_id == wall_id), None)
         if source_wall is None or wall is None:

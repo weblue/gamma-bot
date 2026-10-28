@@ -2,7 +2,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from decimal import Decimal
 import re
 from types import MappingProxyType
 from zoneinfo import ZoneInfo
@@ -11,9 +10,10 @@ from gamma_bot.data.models import (
     Event, GexSnapshot, InvalidDatasetError, MesBar, OptionSnapshot, PricePoint,
     Quote, RunConfig, Trade,
 )
+from gamma_bot.data.semantics import canonical_profile, snapshot_identity
 from .gex import gex_from_options
 from .indicators import OpeningRange, OpeningRangeIndicator, VixIndicator, VixState
-from .mapping import MappedGex, MappedRegion, MappedWall, map_levels, stable_wall
+from .mapping import MappedGex, MappedRegion, MappedWall, MidpointHistory, quote_midpoint, stable_wall
 from .order_flow import Divergence, OrderFlow, PivotDetector, PricePivot
 
 
@@ -47,10 +47,14 @@ class FeatureEngine:
     fail. A run locks GEX source/model/underlying/expiry/provenance on first import;
     a different model needs a different engine. Contract/date switches reset all
     histories, and CVD/pivots reset again at equity open. Macro/margin are separate
-    replay gates, not features marked available here.
+    replay gates, not features marked available here. Replay supplies source
+    metadata to gate normalized profile membership; standalone feature callers
+    omitting it assert that their snapshots already use canonical semantics.
     """
-    def __init__(self, config: RunConfig | None = None, *, mapping_window_minutes: int | None = None):
+    def __init__(self, config: RunConfig | None = None, *, mapping_window_minutes: int | None = None,
+                 source_metadata: Mapping | None = None):
         self.config = config or RunConfig()
+        self.source_metadata = source_metadata
         if mapping_window_minutes is not None and (
                 type(mapping_window_minutes) is not int or mapping_window_minutes <= 0):
             raise InvalidDatasetError("mapping_window_minutes must be a positive integer")
@@ -77,8 +81,7 @@ class FeatureEngine:
         self._gex_snapshot: GexSnapshot | None = None
         self._raw_gex: list[GexSnapshot] = []
         self._history: dict[tuple[str, int], MappedGex] = {}
-        self._points: dict[str, dict[datetime, PricePoint]] = {}
-        self._price_sources: dict[str, str] = {}
+        self._midpoints = MidpointHistory(self.config, self.mapping_window_minutes)
         self._divergences: tuple[Divergence, ...] = ()
 
     @property
@@ -90,29 +93,12 @@ class FeatureEngine:
             return
         if point.symbol != "SPY" and point.symbol != self._contract:
             return
-        source = self._price_sources.setdefault(point.symbol, point.source_id)
-        if source != point.source_id:
-            raise InvalidDatasetError("mapping midpoint source switch requires a separate feature engine")
-        minute = point.event_at.replace(second=0, microsecond=0)
-        points = self._points.setdefault(point.symbol, {})
-        old = points.get(minute)
-        if old is None or (point.event_at, point.available_at, point.sequence) > (
-                old.event_at, old.available_at, old.sequence):
-            points[minute] = point
-        seconds = (self.mapping_window_minutes * 60 if self.mapping_window_minutes is not None
-                   else self.config.mapping_window_seconds)
-        cutoff = as_of - timedelta(seconds=seconds)
-        for symbol in self._points:
-            self._points[symbol] = {m: p for m, p in self._points[symbol].items()
-                                    if p.event_at >= cutoff}
+        self._midpoints.update(point, as_of)
 
     def _mapped(self, as_of: datetime) -> MappedGex | None:
         if self._gex_snapshot is None or self._contract is None:
             return None
-        mes, spy = self._points.get(self._contract, {}), self._points.get("SPY", {})
-        pairs = [(mes[m], spy[m]) for m in sorted(mes.keys() & spy.keys())]
-        return map_levels(self._gex_snapshot, pairs, as_of,
-                          window_minutes=self.mapping_window_minutes, config=self.config)
+        return self._midpoints.mapped(self._gex_snapshot, self._contract, as_of)
 
     def update(self, event: Event) -> FeatureState:
         key = (event.available_at, event.event_at, event.source_id, event.sequence)
@@ -125,8 +111,7 @@ class FeatureEngine:
         if isinstance(event, OptionSnapshot):
             gex_from_options(event)
         if isinstance(event, GexSnapshot):
-            identity = (event.source_id, event.model_id, event.underlying,
-                        event.expiry_days, event.provenance)
+            identity = snapshot_identity(event)
             if self._gex_identity is not None and identity != self._gex_identity:
                 raise InvalidDatasetError("GEX source/model/expiry switch requires a separate feature engine")
             self._gex_identity = identity
@@ -155,10 +140,7 @@ class FeatureEngine:
                 self._point(event, event.available_at)
         elif isinstance(event, Quote):
             self._flow.update(event)
-            self._point(PricePoint(source_id=event.source_id, sequence=event.sequence,
-                event_at=event.event_at, available_at=event.available_at,
-                symbol=event.contract, value=Decimal(event.bid_ticks + event.ask_ticks) / 8,
-                price_kind="mid"), event.available_at)
+            self._point(quote_midpoint(event), event.available_at)
         elif isinstance(event, Trade):
             trade_local = event.event_at.astimezone(self._zone)
             if trade_local.date() == self._date and trade_local.time() >= self.config.opening_range_start:
@@ -206,7 +188,9 @@ class FeatureEngine:
             unavailable["gex"] = "fresh imported GEX snapshot unavailable"
         if current is None:
             unavailable["mapping"] = "five causal paired midpoint minutes and fresh latest pair unavailable"
-        if current is None or not current.snapshot.profile_available:
+        if (current is None or not current.snapshot.profile_available or
+                self.source_metadata is not None and not canonical_profile(
+                    self.source_metadata.get(current.snapshot.source_id, {}))):
             unavailable["negative_regions"] = "documented price-dependent negative-gamma profile unavailable"
         if self._flow.value_at(event.available_at) is None:
             unavailable["cvd"] = "classified session trade history unavailable or contains unknown volume"

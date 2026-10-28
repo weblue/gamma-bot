@@ -15,7 +15,10 @@ The result contains `trades`, `equity_curve`, `skips`, `unresolved_exposure`,
 its manifest additionally records the code revision. Exit 0 means replay
 completed, 2 means requested input coverage is unsupported, and 1 means invalid
 input/configuration or an output error. Input coverage is potential availability,
-not a passed strategy filter or full-session executability. `experiment_scope`
+not a passed strategy filter or full-session executability. An audit can admit a
+candidate margin stream while runtime discovers that the selected contract lacks
+causal margin. Such a run is `unsupported`, keeps its actual diagnostics and
+accounting, and cannot publish zero-return performance. `experiment_scope`
 records full versus reduced declarations; `excluded_sessions` records roll
 exclusions. A valid zero-trade replay is distinct from unsupported coverage.
 
@@ -55,7 +58,14 @@ entry, with partial fills transferring collateral to actual Account lots. Entry
 prices are re-estimated before execution; higher costs reduce permissible size.
 A changed initial-margin requirement cancels the remaining order rather than
 silently changing its collateral. A gap can cancel an order without a fill.
-Post-fill marked risk is checked again; a breach keeps actual fills in the ledger,
+Before each full or partial fill, initial collateral for held lots plus the
+proposed quantity must fit current equity after the entry fee and conservative
+quote spread/slippage mark (bar entries use their opening mark). The pending
+order's own reservation is not counted twice. Unaffordable residual entries are
+cancelled; actual filled lots remain protected. Initial-margin capital and
+maintenance liquidation are separate rules. Any post-fill initial-collateral
+breach is reported as `initial_margin_deficit` and requests a later executable
+liquidation. Post-fill marked risk is checked again; a breach keeps actual fills in the ledger,
 cancels pending size and requests liquidation at the next executable event.
 Remaining pending risk is cancelled if filled risk plus its reservation exceeds
 the current budget. Callbacks occur only on the first actual entry fill.
@@ -129,7 +139,13 @@ largest arbitrary future quarter and never a backward roll.
 Both current and immediate next quarter require complete prior-session evidence.
 Missing either excludes the entire trading session, even for single-contract
 startup. The excluded session's bars still build evidence for the next session.
-A roll resets all feature history and requires fresh warm-up. Schema v1 has no
+A roll resets feature history and requires fresh warm-up. The experiment's
+validated GEX identity persists through rolls and excluded sessions; changing a
+source, model, underlying, expiry universe or provenance requires a separate
+input dataset/experiment. `manifest.gex_identity` derives from actual supplied
+snapshots even for unsupported or zero-trade runs, and explicitly says
+`unselected` when none exists. Standalone reports render the actual configured
+starting capital. Schema v1 has no
 verified exchange expiry date; delivery-month and older contracts are excluded
 rather than inferring an expiry holiday rule. This conservative research policy
 loses some valid pre-expiry trading sessions and is not broker-ready expiry

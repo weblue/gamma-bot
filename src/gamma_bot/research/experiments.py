@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 from gamma_bot.data.models import Dataset, InvalidDatasetError, MesBar, RunConfig
 from gamma_bot.data.provenance import to_jsonable
+from gamma_bot.data.semantics import experiment_gex_identity
 from gamma_bot.replay.engine import ReplayResult, run_replay
 from gamma_bot.replay.roll import RollSelector
 from gamma_bot.strategies import (Variant, ReversalStrategy, BreakoutStrategy,
@@ -160,6 +161,7 @@ def experiment_plan(dataset: Dataset, config: RunConfig, variants: Sequence[Vari
     # Names become artifact directories; prohibit path traversal for direct callers.
     if any(not v.name.isascii() or not v.name.replace('_', '').replace('-', '').isalnum() for v in variants):
         raise InvalidDatasetError('variant name must be a safe artifact identifier')
+    identity = experiment_gex_identity(dataset)
     families = {v.name: _constructor(v).family for v in variants}
     scenarios = sensitivity_configs(config)
     complete = complete_session_dates(dataset)
@@ -169,7 +171,7 @@ def experiment_plan(dataset: Dataset, config: RunConfig, variants: Sequence[Vari
              {'demonstration': _session_dates(dataset, require_complete=False)})
     return {'schema_version': 1, 'completeness_policy_version': COMPLETENESS_POLICY_VERSION,
         'status': 'chronological_evaluation' if enough else 'pipeline_demonstration',
-        'selection_policy': 'none', 'completeness_rule': COMPLETENESS_RULE,
+        'selection_policy': 'none', 'gex_identity': identity, 'completeness_rule': COMPLETENESS_RULE,
         'complete_session_dates': complete, 'parts': parts,
         'variants': {v.name: {'family': families[v.name], 'variant': v} for v in variants},
         'scenarios': scenarios, 'input_hashes': dataset.input_hashes,
@@ -210,6 +212,8 @@ def evaluate(dataset: Dataset, config: RunConfig, variants: Sequence[Variant],
             constructor = _constructor(variant)
             for scenario, candidate in plan['scenarios'].items():
                 strategy = constructor(candidate, variant=variant)
-                results[f'{part}/{variant.name}/{scenario}'] = run_replay(data, candidate,
+                result = run_replay(data, candidate,
                     variant, strategies=[strategy], admitted_session_dates=dates)
+                results[f'{part}/{variant.name}/{scenario}'] = replace(result,
+                    manifest=dict(result.manifest, gex_identity=plan['gex_identity']))
     return MappingProxyType(results)

@@ -3,9 +3,11 @@ from collections import defaultdict
 from bisect import bisect_left, bisect_right
 from datetime import time, timedelta
 from zoneinfo import ZoneInfo
+import re
 
 from .ordering import causally_precedes
-from .models import (CapabilityError, CoverageReport, Dataset, GexSnapshot, MesBar,
+from .semantics import canonical_profile, experiment_gex_identity, snapshot_identity
+from .models import (CapabilityError, CoverageReport, Dataset, GexSnapshot, InvalidDatasetError, MesBar,
                      PricePoint, Quote, RULE_IDS, RunConfig, Trade)
 
 
@@ -14,7 +16,7 @@ REASONS = {
     "mes_prices": "Missing explicit MES execution prices.",
     "gex": "Missing non-indicative as-of GEX snapshots with model and expiry universe.",
     "negative_regions": "Missing available modeled profile and documented boundary membership convention.",
-    "mapping": "Missing five contemporaneous actual underlying midpoints paired with MES quotes in five minutes.",
+    "mapping": "Missing five contemporaneous actual underlying midpoints paired with actual MES midpoints in five minutes.",
     "cvd": "Missing MES trades with real aggressor direction or ordered quote-classification inputs.",
     "vix": "Missing ten consecutive completed one-minute VIX index observations.",
     "wall_migration": "Missing three same-model wall snapshots spanning 5–15 minutes with gaps at most five minutes.",
@@ -54,6 +56,7 @@ def audit_dataset(dataset: Dataset, required_rules: frozenset[str], *,
     coverage. Synthetic/indicative/unknown data never classify as full evidence.
     """
     cfg = config or RunConfig()
+    experiment_gex_identity(dataset)
     if required_rules - RULE_IDS:
         raise CapabilityError("unknown required rule IDs: " + ", ".join(sorted(required_rules - RULE_IDS)))
     dates = {r: set() for r in RULE_IDS}
@@ -67,7 +70,7 @@ def audit_dataset(dataset: Dataset, required_rules: frozenset[str], *,
     for e in gex:
         dates["gex"].add(_day(e.event_at))
         meta = dataset.source_metadata.get(e.source_id, {})
-        if e.profile_available and meta.get("profile_boundary_convention"):
+        if e.profile_available and canonical_profile(meta):
             dates["negative_regions"].add(_day(e.event_at))
     for e in trades:
         if e.aggressor != "unknown":
@@ -84,26 +87,43 @@ def audit_dataset(dataset: Dataset, required_rules: frozenset[str], *,
     for day, minute_ends in vix_by_day.items():
         if any(all(end - timedelta(minutes=i) in minute_ends for i in range(10)) for end in minute_ends):
             dates["vix"].add(day)
-    # Mapping must use the snapshot's actual underlying, never an adjusted close.
-    for underlying in {e.underlying for e in gex}:
-        paired = defaultdict(set)
-        for p in points:
-            if p.symbol != underlying or p.price_kind != "mid":
+    # Use the exact runtime history, quote conversion and mapper. Separate
+    # contracts/dates never pool warm-up; ambiguous source streams fail closed.
+    from gamma_bot.features.mapping import MidpointHistory, quote_midpoint
+    mapping_events = [*gex, *quotes, *(p for p in points if p.symbol == 'SPY' or
+        re.fullmatch(r'MES(?:[HMUZ]\d{1,4}|\d{4}[HMUZ])', p.symbol))]
+    contracts = {q.contract for q in quotes} | {p.symbol for p in points if
+        re.fullmatch(r'MES(?:[HMUZ]\d{1,4}|\d{4}[HMUZ])', p.symbol)}
+    streams, snapshots, invalid, mapped_streams = {}, {}, set(), set()
+    for event in sorted(mapping_events, key=lambda e: (e.available_at, e.event_at, e.source_id, e.sequence)):
+        day = _day(event.available_at)
+        for contract in contracts:
+            key = (day, contract)
+            if key in invalid:
                 continue
-            if p.available_at - p.event_at > timedelta(seconds=60):
-                continue
-            for q in quotes:
-                at = max(p.available_at, q.available_at)
-                if (timedelta(0) <= at - p.event_at <= timedelta(seconds=60) and
-                        timedelta(0) <= at - q.event_at <= timedelta(seconds=60)):
-                    paired[(_day(at), q.contract)].add(_minute(at))
-        for (day, _), minutes in paired.items():
-            if any(sum(timedelta(0) <= end - m <= timedelta(seconds=cfg.mapping_window_seconds) for m in minutes) >= max(5, cfg.mapping_min_pairs) for end in minutes):
-                dates["mapping"].add(day)
+            if isinstance(event, GexSnapshot):
+                old = snapshots.get(key)
+                if old is None or event.event_at >= old.event_at:
+                    snapshots[key] = event
+            else:
+                point = quote_midpoint(event) if isinstance(event, Quote) else event
+                if point.symbol not in (contract, 'SPY'):
+                    continue
+                history = streams.setdefault(key, MidpointHistory(cfg))
+                try:
+                    history.update(point, event.available_at)
+                except InvalidDatasetError:
+                    invalid.add(key)
+                    mapped_streams.discard(key)
+                    continue
+            if key in snapshots and key in streams and streams[key].mapped(
+                    snapshots[key], contract, event.available_at) is not None:
+                mapped_streams.add(key)
+    dates['mapping'].update(day for day, _ in mapped_streams)
     groups = defaultdict(list)
     for e in gex:
         if e.walls and e.available_at - e.event_at <= timedelta(minutes=5):
-            groups[(e.source_id, e.underlying, e.model_id, e.expiry_days, _day(e.event_at))].append(e)
+            groups[(*snapshot_identity(e).values(), _day(e.event_at))].append(e)
     for key, snapshots in groups.items():
         if _has_wall_window(snapshots):
             dates["wall_migration"].add(key[-1])
@@ -122,18 +142,22 @@ def audit_dataset(dataset: Dataset, required_rules: frozenset[str], *,
         dates["macro"].update(s.session_date for s in dataset.sessions
                               if s.session_date in dataset.macro_coverage_dates
                               and dataset.macro_schedule_available_at <= s.open_at)
-    # A historical/scenario margin may be effective before the first event day.
+    # Establish potential on one covered execution stream. Adjacent-contract
+    # roll bars need no execution margin; replay checks the actual selected
+    # contract and suppresses performance if that causal margin is absent.
     for day in dates["mes_prices"]:
         prices = [e for e in bars+quotes+trades if _day(e.event_at) == day]
-        if prices and all(any(m.contract == e.contract and m.available_at <= e.available_at
-                              for m in dataset.margin_points) for e in prices):
+        streams = {e.contract for e in prices}
+        if any(all(any(m.contract == contract and m.available_at <= e.available_at
+                       for m in dataset.margin_points)
+                   for e in prices if e.contract == contract) for contract in streams):
             dates["margin"].add(day)
 
     supported = frozenset(rule for rule, days in dates.items() if days)
     missing = {rule: REASONS[rule] for rule in sorted(required_rules - supported)}
     if 'mapping' in missing and (cfg.mapping_window_seconds, cfg.mapping_min_pairs) != (300, 5):
         missing['mapping'] = (f'Missing {max(5, cfg.mapping_min_pairs)} contemporaneous actual underlying '
-            f'midpoints paired with MES quotes in {cfg.mapping_window_seconds} trailing seconds.')
+            f'midpoints paired with actual MES midpoints in {cfg.mapping_window_seconds} trailing seconds.')
     common = set.intersection(*(dates[r] for r in required_rules)) if required_rules else set()
     freshness, gaps = {}, {}
     for source in sorted({e.source_id for e in dataset.events}):

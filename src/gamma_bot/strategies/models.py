@@ -10,6 +10,7 @@ from typing import Literal, Protocol
 from zoneinfo import ZoneInfo
 
 from gamma_bot.data.models import RunConfig
+from gamma_bot.data.semantics import snapshot_identity
 from gamma_bot.features.state import FeatureState, MappedGex
 
 Direction = Literal["long", "short"]
@@ -48,8 +49,7 @@ class Strategy(Protocol):
 
 
 def gex_identity(gex: MappedGex) -> tuple:
-    snap = gex.snapshot
-    return (snap.source_id, snap.model_id, snap.underlying, snap.expiry_days, snap.provenance)
+    return tuple(snapshot_identity(gex.snapshot).values())
 
 
 def usable_gex(gex: MappedGex | None, as_of: datetime, config: RunConfig) -> bool:

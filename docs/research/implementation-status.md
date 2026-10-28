@@ -1,7 +1,8 @@
 # MES research implementation status
 
 The nine-task research plan is implemented on `codex/mes-research-mvp`.
-Individual task reviews are clean; final whole-branch acceptance is in progress.
+Individual task reviews are clean. The consolidated final integration fixes are
+implemented; independent whole-branch acceptance remains in progress.
 This is an offline research release. It does not connect to IBKR or submit orders.
 
 ## Delivered
@@ -63,6 +64,11 @@ so another implementation can reproduce or revise the experiment.
 | Vary mapping, fees and slippage one at a time around a frozen reference. | Required scenarios do not mandate a factorial study. | Joint parameter interactions are unmeasured. |
 | Pass optional RunConfig into mapping coverage audit. | Capability admission must match the experiment window/minimum pairs. | Additive audit API/compatibility tests. |
 | Define complete sessions by event-time bars, not zero final-bar publication latency; freeze policy version 2. | Normal publication delay must not force a full feed into demonstration-only status. | Late-published bars can count toward coverage, while runtime decisions/rolls still require actual availability. |
+| Recheck initial collateral after fees and executable marks before every fill. | Pending risk alone cannot establish available initial-margin capital. | Residual entries can be cancelled even when maintenance remains sufficient. |
+| Validate and report one canonical actual GEX identity across the whole input experiment/study. | Rolls, exclusions, zero trades and study splits cannot change or mislabel the hypothesis. | Mixed-identity datasets must be separated; optional metadata must agree; existing frozen study output paths cannot be reused. |
+| Share midpoint histories and mapping semantics between audit and runtime. | Explicit actual MES midpoints must work without executable quotes; source/clock mixing cannot establish capability. | Ambiguous mapping sources fail closed; an audit remains input potential. |
+| Require margin capability for an individual stream and exact selected margin at runtime. | Adjacent-quarter roll bars need not have execution collateral. | Missing active margin suppresses completed performance, even with zero trades. |
+| Accept only the canonical normalized lower-inclusive, upper-exclusive profile declaration. | Arbitrary metadata cannot silently change membership at a boundary. | Other source conventions need validated normalization; unknown semantics cannot certify absence of negative regions. |
 
 ## Reproduce
 
