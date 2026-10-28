@@ -153,3 +153,35 @@ def test_engine_mapping_window_override_is_propagated():
     for event in ordered(events):
         state = engine.update(event)
     assert state.current_gex.ratio == Decimal("10")
+
+
+@pytest.mark.parametrize("ordering,expected", [
+    ("cross_source_tie", None), ("same_source_sequence", 10),
+    ("different_availability", 10), ("different_event_time", 10),
+])
+def test_import_audit_and_runtime_share_quote_predecessor_policy(dataset_writer, ordering, expected):
+    from gamma_bot.data.io import load_dataset
+    from gamma_bot.data.provenance import to_jsonable
+    from .helpers import quote
+
+    q = quote(0, source_id="a-quotes", sequence=1)
+    t = trade(0, "unknown", price=24001, source_id="z-trades", sequence=2)
+    if ordering == "same_source_sequence":
+        t = replace(t, source_id=q.source_id)
+    elif ordering == "different_availability":
+        t = replace(t, available_at=at(0, 1))
+    elif ordering == "different_event_time":
+        q = replace(q, available_at=at(0, 1))
+        t = replace(t, event_at=at(0, 1), available_at=at(0, 1))
+    records = [dict(type="quote", **to_jsonable(q)), dict(type="trade", **to_jsonable(t))]
+    dataset = load_dataset(dataset_writer(records))
+    engine = FeatureEngine()
+    for event in dataset.events:
+        state = engine.update(event)
+    if expected is None:
+        assert "cvd" in dataset.coverage.missing_rules
+        assert "cvd" in state.unavailable_rules
+    else:
+        assert "cvd" in dataset.coverage.supported_rules
+        assert "cvd" not in state.unavailable_rules
+    assert engine.cvd == expected

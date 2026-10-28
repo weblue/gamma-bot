@@ -4,6 +4,7 @@ from bisect import bisect_left, bisect_right
 from datetime import time, timedelta
 from zoneinfo import ZoneInfo
 
+from .ordering import causally_precedes
 from .models import (CapabilityError, CoverageReport, Dataset, GexSnapshot, MesBar,
                      PricePoint, Quote, RULE_IDS, Trade)
 
@@ -29,11 +30,6 @@ def _day(at):
 
 def _minute(at):
     return at.replace(second=0, microsecond=0)
-
-
-def _precedes(quote, trade):
-    qtime, ttime = (quote.available_at, quote.event_at), (trade.available_at, trade.event_at)
-    return qtime < ttime or (qtime == ttime and quote.source_id == trade.source_id and quote.sequence < trade.sequence)
 
 
 def _has_wall_window(snapshots):
@@ -74,7 +70,7 @@ def audit_dataset(dataset: Dataset, required_rules: frozenset[str]) -> CoverageR
     for e in trades:
         if e.aggressor != "unknown":
             dates["cvd"].add(_day(e.event_at))
-        elif any(q.contract == e.contract and _precedes(q, e) and
+        elif any(q.contract == e.contract and causally_precedes(q, e) and
                  timedelta(0) <= e.event_at - q.event_at <= timedelta(seconds=60) for q in quotes):
             dates["cvd"].add(_day(e.event_at))
     # VIX observations are minute-completion labels, not daily closes.

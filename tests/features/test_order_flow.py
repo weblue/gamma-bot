@@ -1,3 +1,5 @@
+import pytest
+
 from gamma_bot.features.order_flow import OrderFlow, PivotDetector
 from .helpers import at, bar, quote, trade
 
@@ -14,7 +16,7 @@ def test_unknown_trade_poisoned_cvd_is_not_valid_zero():
 
 def test_declared_quote_then_tick_classifier_and_causal_cvd_cutoff():
     flow = OrderFlow()
-    flow.update(quote(0))
+    flow.update(quote(0, source_id="synthetic-trades", sequence=9999))
     flow.update(trade(0, "unknown", size=3, price=24001))
     flow.update(trade(1, "unknown", size=2, price=24002))
     flow.update(trade(2, "sell", size=4))
@@ -64,3 +66,43 @@ def test_bearish_divergence_compares_successive_confirmed_highs():
         assert pivots.update(bar(minute, high=highs[minute]), cvds[minute]) == ()
     divergence, = pivots.update(bar(8, high=highs[8]), cvds[8])
     assert (divergence.direction, divergence.second_pivot_ticks, divergence.confirmed_at) == ("short", 24011, at(9))
+
+
+@pytest.mark.parametrize("first_sequence,second_sequence", [(100, 1), (1, 100)])
+def test_cross_source_tick_ties_are_ambiguous_regardless_of_sequences(first_sequence, second_sequence):
+    flow = OrderFlow()
+    flow.update(trade(0, "sell", size=3, price=24000, source_id="a-trades", sequence=first_sequence))
+    flow.update(trade(0, "unknown", size=5, price=24001, source_id="z-trades", sequence=second_sequence))
+    assert flow.value_at(at(0)) is None
+
+
+@pytest.mark.parametrize("price,expected", [(24000, -8), (24001, 2)])
+def test_same_source_tick_sequence_is_usable_at_tied_timestamps(price, expected):
+    flow = OrderFlow()
+    flow.update(trade(0, "sell", size=3, price=24000, source_id="one-feed", sequence=100))
+    flow.update(trade(0, "unknown", size=5, price=price, source_id="one-feed", sequence=101))
+    assert flow.value_at(at(0)) == expected
+
+
+def test_cross_source_tick_with_later_availability_has_causal_predecessor():
+    flow = OrderFlow()
+    flow.update(trade(0, "sell", size=3, price=24000, source_id="a-trades", sequence=100))
+    flow.update(trade(0, "unknown", size=5, price=24001, source_id="z-trades", sequence=1,
+                      available_at=at(0, 1)))
+    assert flow.value_at(at(0, 1)) == 2
+
+
+def test_tick_rule_cannot_choose_between_ambiguous_latest_trade_feeds():
+    flow = OrderFlow()
+    flow.update(trade(0, "sell", size=3, price=24000, source_id="a-trades", sequence=100))
+    flow.update(trade(0, "buy", size=5, price=24002, source_id="z-trades", sequence=1))
+    flow.update(trade(1, "unknown", size=2, price=24001, source_id="later-trades", sequence=1))
+    assert flow.value_at(at(1)) is None
+
+
+def test_quote_rule_cannot_choose_between_ambiguous_latest_quote_feeds():
+    flow = OrderFlow()
+    flow.update(quote(0, source_id="a-quotes", sequence=100))
+    flow.update(quote(0, source_id="z-quotes", sequence=1, bid_ticks=24001, ask_ticks=24003))
+    flow.update(trade(1, "unknown", price=24001))
+    assert flow.value_at(at(1)) is None

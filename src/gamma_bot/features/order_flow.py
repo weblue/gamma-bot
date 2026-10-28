@@ -5,13 +5,16 @@ from datetime import datetime, timedelta
 from typing import Literal
 
 from gamma_bot.data.models import MesBar, Quote, RunConfig, Trade
+from gamma_bot.data.ordering import latest_causal_predecessor
 
 
 class OrderFlow:
     """Use supplied aggressor, then fresh uncrossed bid/ask, then tick rule.
 
     At/above ask buys, at/below bid sells. Inside/ambiguous quotes use the last
-    earlier trade's price change, carrying its classified side for an equal tick.
+    causal trade's price change, carrying its classified side for an equal tick.
+    Equal-time cross-feed observations are ambiguous; source-name sorting is not
+    causal evidence. Only same-source sequence order can resolve exact ties.
     Unclassified volume poisons session CVD rather than becoming valid zero.
     value_at is an event-time cutoff over already received trades, so a delayed
     bar cannot consume a trade after its own completion.
@@ -33,9 +36,9 @@ class OrderFlow:
         sign = {"buy": 1, "sell": -1}.get(event.aggressor)
         if sign is None:
             quotes = [q for q in self._quotes if q.contract == event.contract
-                      and q.event_at <= event.event_at and q.available_at <= event.available_at
+                      and q.event_at <= event.event_at
                       and (event.event_at - q.event_at).total_seconds() <= self.config.mapping_max_age_seconds]
-            quote = max(quotes, key=lambda q: (q.event_at, q.available_at, q.sequence)) if quotes else None
+            quote = latest_causal_predecessor(quotes, event)
             if quote is not None and quote.bid_ticks < quote.ask_ticks:
                 if event.price_ticks >= quote.ask_ticks:
                     sign = 1
@@ -43,12 +46,10 @@ class OrderFlow:
                     sign = -1
             if sign is None:
                 previous = [(t, s) for t, s in self._trades if t.contract == event.contract
-                            and (t.event_at, t.available_at, t.sequence)
-                            < (event.event_at, event.available_at, event.sequence)
-                            and t.available_at <= event.available_at]
-                if previous:
-                    last, last_sign = max(previous, key=lambda ts: (
-                        ts[0].event_at, ts[0].available_at, ts[0].sequence))
+                            and t.event_at <= event.event_at]
+                last = latest_causal_predecessor((t for t, _ in previous), event)
+                if last is not None:
+                    last_sign = next(s for t, s in previous if t is last)
                     sign = (1 if event.price_ticks > last.price_ticks else
                             -1 if event.price_ticks < last.price_ticks else last_sign)
         self._trades.append((event, sign))
