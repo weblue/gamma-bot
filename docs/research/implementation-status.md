@@ -1,8 +1,9 @@
 # MES research implementation status
 
 The nine-task research plan is implemented on `codex/mes-research-mvp`.
-Individual task reviews are clean. The consolidated final integration fixes are
-implemented; independent whole-branch acceptance remains in progress.
+Individual task reviews and final whole-branch acceptance are complete. All seven
+final findings were fixed and independently re-reviewed; no open findings remain.
+Branch integration awaits the user's choice.
 This is an offline research release. It does not connect to IBKR or submit orders.
 
 ## Delivered
@@ -83,3 +84,24 @@ From the repository root after installing the project:
 Open `reports/demo/report.html` or `reports/study/comparison.html`. Use a new study
 output directory when frozen data, parameters or policy change. Generated reports
 and raw recordings remain ignored by Git. No command enables live trading.
+
+## Final verification (2026-10-28)
+
+The final product commit is `c6fd46645af7191563ff0e4d65f1e38772e41696`.
+A fresh controller run of `.venv/bin/python -m pytest -q` passed **523 tests**
+in 17.12 seconds, including 45 added final integration cases. Scoped re-review
+confirmed all seven findings addressed: initial collateral after fees/marks,
+run/study GEX identity, inactive-contract margin admission, actual midpoint
+admission, canonical profile membership, zero-trade provenance and capital display.
+No new Critical, Important or Minor finding remained.
+
+Fresh CLI acceptance returned the expected exits: incomplete audit 2, synthetic
+baseline replay 0, unsupported full reversal 2, demonstration evaluation 0, and
+no-verified-source recording 2. Generated evidence is in the ignored
+`reports/mvp-final-2026-10-28` directory. The baseline ledger reconciles to final
+equity; the study retains 49 unsupported, five synthetic mechanics and two
+unresolved attempts. Every attempt marks historical performance unavailable.
+The record command creates neither event nor checkpoint files.
+
+These checks establish the delivered software behavior under the exercised
+contracts. They do not establish historical profitability or IBKR readiness.

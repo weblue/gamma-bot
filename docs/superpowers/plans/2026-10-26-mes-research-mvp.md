@@ -10,7 +10,7 @@
 
 **Spec:** [Approved MES design](../specs/2026-10-26-mes-mvp-design.md). Read both documents. User approved the design and its proposed defaults on 2026-10-26.
 
-**Implementation status (2026-10-28):** All nine research tasks implemented and individually reviewed. Final whole-branch acceptance is in progress. The source audit remains `no_gex_history` / `no_verified_source`; no historical strategy validation or broker execution is claimed. See [research status](../../research/implementation-status.md).
+**Implementation status (2026-10-28):** All nine research tasks implemented and individually reviewed. Final whole-branch acceptance is complete (523 tests; all seven final findings fixed and re-reviewed). Branch integration awaits user choice. The source audit remains `no_gex_history` / `no_verified_source`; no historical strategy validation or broker execution is claimed. See [research status](../../research/implementation-status.md).
 
 ## Global Constraints
 
@@ -294,11 +294,11 @@ The plan must reuse `FeatureEngine`, strategy signals, `size_trade`, and calenda
 
 ## Self-review and final acceptance
 
-- [ ] Match each approved requirement to its owner: data/provenance (1–2), risk/calendar/capital/roll (3, 6), GEX and confirmations (4–5), fills/exits (6), reporting and honest claims (7), evaluation (8), recording (9), IBKR lifecycle (separate operational plan above).
-- [ ] Check interfaces and type names against earlier tasks; do not create second versions of `Fill`, `Signal`, `GexSnapshot`, or account arithmetic.
-- [ ] Confirm all five Review Focus items have behavioral checks in their owning tasks, rather than configuration/source-text assertions.
-- [ ] Run `.venv/bin/python -m pytest -q`, the real-data audit where available, and one end-to-end fixture demonstration. Inspect the final diff and `git diff --check`. Broaden tests only for new failures or unresolved risks.
-- [ ] Report separate outcomes for software mechanics, actual data coverage, historical strategy evidence, forward source access, and broker readiness. Do not mark unsupported later milestones complete.
+- [x] Match each approved requirement to its owner: data/provenance (1–2), risk/calendar/capital/roll (3, 6), GEX and confirmations (4–5), fills/exits (6), reporting and honest claims (7), evaluation (8), recording (9), IBKR lifecycle (separate operational plan above).
+- [x] Check interfaces and type names against earlier tasks; do not create second versions of `Fill`, `Signal`, `GexSnapshot`, or account arithmetic.
+- [x] Confirm all five Review Focus items have behavioral checks in their owning tasks, rather than configuration/source-text assertions.
+- [x] Run `.venv/bin/python -m pytest -q`, the real-data audit where available, and one end-to-end fixture demonstration. Inspect the final diff and `git diff --check`. Broaden tests only for new failures or unresolved risks.
+- [x] Report separate outcomes for software mechanics, actual data coverage, historical strategy evidence, forward source access, and broker readiness. Do not mark unsupported later milestones complete.
 - [ ] Follow the execution skill's review/branch-finishing procedure. Never merge without user authorization.
 
 ## Execution handoff
