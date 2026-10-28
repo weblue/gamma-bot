@@ -52,7 +52,7 @@ def test_insufficient_sessions_are_pipeline_demonstration(tmp_path):
     assert frozen['development'] == frozen['evaluation'] == []
 
 
-def test_complete_dates_exclude_partial_duplicate_delayed_and_data_only_sessions():
+def test_complete_dates_exclude_partial_duplicate_and_data_only_sessions():
     from gamma_bot.research.experiments import complete_session_dates
     data = complete_data(10)
     assert complete_session_dates(data) == tuple(s.session_date for s in data.sessions[1:])
@@ -65,7 +65,7 @@ def test_complete_dates_exclude_partial_duplicate_delayed_and_data_only_sessions
     assert complete_session_dates(duplicate) == tuple(s.session_date for s in data.sessions[1:-1])
     delayed = replace(data, events=tuple(replace(b, available_at=b.available_at+timedelta(days=1))
                       if b is active else b for b in data.events))
-    assert complete_session_dates(delayed) == tuple(s.session_date for s in data.sessions[1:-1])
+    assert complete_session_dates(delayed) == tuple(s.session_date for s in data.sessions[1:])
     assert last.contract == 'MESZ6'
 
 
@@ -248,24 +248,26 @@ def test_invalid_manifest_split_collision_is_rejected_before_writing(tmp_path):
     assert not list(tmp_path.iterdir())
 
 
-def test_mapping_sensitivity_admits_five_sparse_pairs_without_weakening_default_audit():
+@pytest.mark.parametrize('window, minutes', [(600, (10, 12, 14, 16, 20)), (900, (5, 8, 12, 16, 20))])
+def test_mapping_sensitivity_includes_lower_bound_pair_in_audit_and_replay(window, minutes):
     from gamma_bot.data.coverage import audit_dataset
     from gamma_bot.data.models import PricePoint
     from gamma_bot.strategies import BreakoutStrategy
     from tests.strategies.helpers import profile
     data = dataset()
     points = []
-    for i, minute in enumerate((10, 12, 14, 16, 18)):
+    for i, minute in enumerate(minutes):
         at = OPEN + timedelta(minutes=minute)
         points.extend((replace(quote(1, 24000, 24002), event_at=at, available_at=at, sequence=70000+i),
             PricePoint(source_id='synthetic', sequence=80000+i, event_at=at, available_at=at,
                        symbol='SPY', value=Decimal('600'), price_kind='mid')))
-    data = replace(data, events=(*data.events, *points, profile(18, negative=True, source='synthetic').snapshot),
+    data = replace(data, events=(*data.events, *points, profile(20, negative=True, source='synthetic').snapshot),
         source_metadata={'synthetic': {'classification': 'synthetic', 'availability_verified': True,
             'profile_boundary_convention': 'lower inclusive, upper exclusive'}})
     required = frozenset({'mes_prices', 'opening_range', 'gex', 'mapping', 'negative_regions', 'macro', 'margin'})
     assert 'mapping' in audit_dataset(data, required).missing_rules
-    cfg = replace(RunConfig(), mapping_window_seconds=600)
+    cfg = replace(RunConfig(), mapping_window_seconds=window)
+    assert 'mapping' not in audit_dataset(data, required, config=cfg).missing_rules
     strategy = BreakoutStrategy(cfg)
     result = run_replay(data, cfg, strategy.variant, strategies=[strategy], admitted_session_dates=(OPEN.date(),))
     assert result.manifest['status'] == 'complete'
@@ -302,3 +304,53 @@ def test_study_rejects_misleading_capital_or_split_settings(changes, tmp_path):
     with pytest.raises(InvalidDatasetError):
         evaluate(dataset(), replace(RunConfig(), **changes), (OpeningRangeBaseline().variant,), tmp_path/'split.json')
     assert not list(tmp_path.iterdir())
+
+
+def test_complete_event_time_sessions_accept_normal_publication_latency():
+    from gamma_bot.research.experiments import complete_session_dates
+    data = complete_data(2)
+    data = replace(data, events=tuple(replace(b, available_at=b.available_at+timedelta(seconds=1)) for b in data.events))
+    assert complete_session_dates(data) == (date(2026, 6, 13), date(2026, 6, 14))
+    strategy = OpeningRangeBaseline()
+    result = run_replay(data, RunConfig(), strategy.variant, strategies=[strategy],
+                        admitted_session_dates=(date(2026, 6, 14),))
+    assert compute_metrics(result)['admissible_session_count'] == 1
+    # A present 16:00 event may establish historical completeness, but replay
+    # must process its final observation only at its actual 16:00:01 publication.
+    close = data.sessions[-1].close_at
+    assert result.equity_curve[-1].at == close+timedelta(seconds=1)
+    assert not any(point.at == close for point in result.equity_curve)
+
+
+def test_late_complete_bar_does_not_supply_unpublished_next_open_roll_volume():
+    from gamma_bot.research.experiments import complete_session_dates
+    data = complete_data(2)
+    previous, current = data.sessions[-2:]
+    final = next(b for b in data.events if b.contract == 'MESU6' and b.event_at == previous.close_at)
+    delayed = replace(final, available_at=current.open_at+timedelta(seconds=1))
+    data = replace(data, events=tuple(delayed if b is final else b for b in data.events))
+    # Previous date remains complete in event time, but today's roll cannot use
+    # its last bar one second before the observation actually becomes available.
+    assert complete_session_dates(data) == (date(2026, 6, 13),)
+    strategy = OpeningRangeBaseline()
+    result = run_replay(data, RunConfig(), strategy.variant, strategies=[strategy],
+                        admitted_session_dates=(date(2026, 6, 14),))
+    assert result.manifest['roll_history'][0]['contract'] is None
+    assert 'roll_evidence_missing' in result.manifest['roll_history'][0]['reasons']
+    assert compute_metrics(result)['admissible_session_count'] == 0
+    assert not result.trades
+
+
+def test_previous_completeness_policy_requires_new_study_output(tmp_path):
+    from gamma_bot.research.experiments import evaluate
+    path = tmp_path/'split.json'
+    # Literal v1 artifact: exact same dates/config, before event-time completeness
+    # was versioned. Changing policy must not silently reuse this frozen study.
+    path.write_text(json.dumps({'schema_version': 1, 'status': 'chronological_evaluation',
+        'complete_session_dates': ['2026-06-13', '2026-06-14'], 'development_fraction': '0.70',
+        'development': ['2026-06-13'], 'evaluation': ['2026-06-14']}))
+    before = path.read_bytes()
+    with pytest.raises(InvalidDatasetError, match='frozen'):
+        evaluate(complete_data(2), RunConfig(), (OpeningRangeBaseline().variant,), path)
+    assert path.read_bytes() == before
+    assert not (tmp_path/'experiments.json').exists()

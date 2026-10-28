@@ -98,7 +98,7 @@ def audit_dataset(dataset: Dataset, required_rules: frozenset[str], *,
                         timedelta(0) <= at - q.event_at <= timedelta(seconds=60)):
                     paired[(_day(at), q.contract)].add(_minute(at))
         for (day, _), minutes in paired.items():
-            if any(sum(timedelta(0) <= end - m < timedelta(seconds=cfg.mapping_window_seconds) for m in minutes) >= max(5, cfg.mapping_min_pairs) for end in minutes):
+            if any(sum(timedelta(0) <= end - m <= timedelta(seconds=cfg.mapping_window_seconds) for m in minutes) >= max(5, cfg.mapping_min_pairs) for end in minutes):
                 dates["mapping"].add(day)
     groups = defaultdict(list)
     for e in gex:

@@ -27,8 +27,11 @@ Completeness is determined without signals, P&L, or GEX filter availability:
 - The existing forward-only roll selector must select a contract at the open
   using complete, causal preceding-session current/adjacent quarterly volume.
 - The selected contract needs exactly one one-minute bar for every regular-session
-  minute, one source, and all bars available by the session close. Early closes
-  use their supplied schedule. Duplicates, gaps and late completion fail this rule.
+  event-time minute from one source. Early closes use their supplied schedule.
+  Duplicates and gaps fail this rule. Publication may follow the close: a present
+  16:00 bar published at 16:00:01 still completes the event-time session. Actual
+  publication controls replay admission and next-session roll evidence; an
+  unpublished preceding-session bar cannot support the next open's roll.
 
 The same calendar applies to full reversal, full breakout, their supported
 single-filter removals and the opening-range baseline. Missing feature inputs
@@ -42,8 +45,9 @@ plus one-at-a-time mapping windows of 300/600/900 trailing seconds, fees of
 200/300/500 USD cents per round trip, and adverse slippage of 1/2/4 ticks per fill.
 Reference duplicates are run once (seven scenarios per default variant). Mapping
 requires at least five valid pairs and retains a higher configured minimum.
-Capability audit uses the requested mapping window and minimum; per-decision
-causality and freshness remain runtime gates. These scenarios do **not** measure
+Capability audit uses the requested mapping window and minimum, including a
+pair exactly at the trailing window's lower bound, as runtime mapping does.
+Per-decision causality and freshness remain runtime gates. These scenarios do **not** measure
 interactions between simultaneous parameter changes. There is no tuning,
 winner selection, holdout optimization or funding recommendation.
 
@@ -56,7 +60,11 @@ change development results.
 
 A frozen artifact cannot be silently rewritten. Later dates, changed parameters,
 changed input-byte hashes or changed logical Dataset contents require a new
-study output path. The normalized Dataset SHA-256 also binds direct API calls
+study output path. Completeness policy version 2 uses event-time coverage;
+`completeness_policy_version: 2` is frozen in the split and experiment manifests
+and retained in comparisons. Studies frozen under the previous by-close
+publication policy require a new study output path, even if their dates match.
+The normalized Dataset SHA-256 also binds direct API calls
 without importer byte hashes; no raw events are exported into study artifacts.
 
 `comparison.json` and `comparison.html` retain every attempted part/variant/scenario,
@@ -90,7 +98,10 @@ development, evaluation = freeze_split(complete_session_dates(dataset), split_pa
 results = evaluate(dataset, config, default_variants(), split_path)
 ```
 
-`freeze_split(Sequence[date], Path)` returns a pair of immutable date tuples.
+`freeze_split(Sequence[date], Path)` returns a pair of immutable date tuples and
+persists the current completeness-policy version. `complete_session_dates` counts
+complete event-time bars present in the Dataset without a by-close publication
+cutoff; actual availability still gates causal roll selection and replay.
 `evaluate(Dataset, RunConfig, Sequence[Variant], Path)` returns an immutable
 mapping of `part/variant/scenario` to the existing `ReplayResult`. It freezes
 `experiments.json` beside the split file and returns every actual replay result;

@@ -183,7 +183,7 @@ def write_comparison(results, experiment_manifest, output_dir: Path) -> None:
     Study metadata lives here, separately from the replay report allowlists.
     Source metadata is passed through the same credential/URL boundary as reports.
     """
-    study = {key: experiment_manifest[key] for key in ('schema_version', 'status',
+    study = {key: experiment_manifest[key] for key in ('schema_version', 'status', 'completeness_policy_version',
         'selection_policy', 'completeness_rule', 'complete_session_dates', 'parts',
         'variants', 'scenarios', 'input_hashes', 'dataset_sha256', 'limitations')}
     runs = {}

@@ -22,13 +22,16 @@ from gamma_bot.strategies import (Variant, ReversalStrategy, BreakoutStrategy,
                                   OpeningRangeBaseline)
 
 ET = ZoneInfo('America/New_York')
+COMPLETENESS_POLICY_VERSION = 2
 COMPLETENESS_RULE = (
     'Session schedule and explicit macro-date coverage published by open; causal '
     'current/adjacent-quarter roll selection from preceding complete session; '
     'selected MES contract has exactly one single-source one-minute bar per '
-    'regular-session minute, all available by close; selected-contract margin '
-    'available by open. Feature/filter availability is reported per experiment, '
-    'not used to select the common session calendar. No P&L or signals are used.'
+    'regular-session event-time minute, regardless of publication latency; '
+    'selected-contract margin available by open. Actual publication times still '
+    'gate replay and preceding-session roll evidence. Feature/filter availability '
+    'is reported per experiment, not used to select the common session calendar. '
+    'No P&L or signals are used.'
 )
 
 
@@ -66,7 +69,8 @@ def freeze_split(session_dates: Sequence[date], output: Path) -> tuple[tuple[dat
     cut = len(days) * 7 // 10
     enough = 0 < cut < len(days)
     development, evaluation = (days[:cut], days[cut:]) if enough else ((), ())
-    _freeze_json(output, {'schema_version': 1, 'status': 'chronological_evaluation' if enough else 'pipeline_demonstration',
+    _freeze_json(output, {'schema_version': 1,
+        'completeness_policy_version': COMPLETENESS_POLICY_VERSION, 'status': 'chronological_evaluation' if enough else 'pipeline_demonstration',
         'complete_session_dates': days, 'development_fraction': '0.70',
         'development': development, 'evaluation': evaluation})
     return development, evaluation
@@ -97,7 +101,7 @@ def _session_dates(dataset, *, require_complete):
             at += timedelta(minutes=1)
         complete = (len(rows) == len(expected) and {b.start_at for b in rows} == expected
             and len({b.source_id for b in rows}) == 1
-            and all(b.event_at-b.start_at == timedelta(minutes=1) and b.available_at <= session.close_at for b in rows))
+            and all(b.event_at-b.start_at == timedelta(minutes=1) for b in rows))
         calendar = (session.schedule_available_at <= session.open_at
             and session.session_date in dataset.macro_coverage_dates
             and dataset.macro_schedule_available_at is not None
@@ -163,7 +167,7 @@ def experiment_plan(dataset: Dataset, config: RunConfig, variants: Sequence[Vari
     enough = 0 < cut < len(complete)
     parts = ({'development': complete[:cut], 'evaluation': complete[cut:]} if enough else
              {'demonstration': _session_dates(dataset, require_complete=False)})
-    return {'schema_version': 1,
+    return {'schema_version': 1, 'completeness_policy_version': COMPLETENESS_POLICY_VERSION,
         'status': 'chronological_evaluation' if enough else 'pipeline_demonstration',
         'selection_policy': 'none', 'completeness_rule': COMPLETENESS_RULE,
         'complete_session_dates': complete, 'parts': parts,
