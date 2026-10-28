@@ -287,3 +287,41 @@ def test_checkpoint_cannot_alias_metadata_or_existing_event_hardlink(recorder, t
         with pytest.raises(InvalidDatasetError):
             recorder.record(FixtureAdapter([bar()]), output, target, stop_at=STOP)
     assert output.read_bytes() == checkpoint.read_bytes() == b'preserve-existing'
+
+
+def test_cleanup_attribute_lookup_failure_is_redacted_and_durable_event_retained(recorder, tmp_path):
+    """Provider-controlled close lookup must share invocation's safe boundary."""
+    import traceback
+
+    output, checkpoint = paths(tmp_path)
+    secret = 'credential=REVIEW_SENTINEL'
+
+    class LookupFailureIterator:
+        def __init__(self):
+            self.observations = iter([bar()])
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            return next(self.observations)
+
+        @property
+        def close(self):
+            raise RuntimeError(secret)
+
+    class LookupFailureAdapter(FixtureAdapter):
+        def events(self):
+            return LookupFailureIterator()
+
+    adapter = LookupFailureAdapter()
+    with pytest.raises(recorder.RecorderError) as failure:
+        recorder.record(adapter, output, checkpoint, stop_at=STOP)
+    assert 'cleanup failed' in str(failure.value)
+    assert secret not in str(failure.value)
+    assert secret not in ''.join(traceback.format_exception(failure.value))
+    assert failure.value.__context__ is None
+    assert failure.value.__cause__ is None
+    assert [event.sequence for event in load_dataset(output).events] == [1]
+    assert json.loads(checkpoint.read_text())['offset'] == len(output.read_bytes())
+    assert secret not in ''.join(path.read_text() for path in tmp_path.iterdir())

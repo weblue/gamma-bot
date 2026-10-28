@@ -323,9 +323,11 @@ def record(adapter: SourceAdapter, output: Path, checkpoint: Path, *, stop_at: d
             except Exception:
                 failure = 'recorder: adapter failed; provider details suppressed'
             finally:
-                if stream is not None and hasattr(stream, 'close'):
+                if stream is not None:
                     try:
-                        stream.close()
+                        close = getattr(stream, 'close', None)
+                        if close is not None:
+                            close()
                     except Exception:
                         failure = 'recorder: adapter cleanup failed; provider details suppressed'
                     if failure:
